@@ -1,0 +1,43 @@
+# Pinned top-level dependencies. Resolves cleanly on Python 3.10-3.12
+# (checked with `uv pip compile` on 3.10 and 3.12). The pack's original
+# requirements.txt does not install: openai==1.0.0 conflicts with
+# langchain-openai==0.0.7, and pydantic==2.0.0 conflicts with fastapi==0.104.0.
+
+# Orchestration
+langchain==0.3.30
+langgraph==0.2.76
+langchain-community==0.3.31
+langchain-openai==0.3.35
+langchain-huggingface==0.1.2
+
+# Vector store and embeddings
+chromadb==0.5.20
+sentence-transformers==3.4.1
+
+# Data and evaluation
+pandas==2.2.3
+numpy==1.26.4
+scikit-learn==1.5.2
+
+# API
+fastapi==0.115.14
+uvicorn==0.32.1
+pydantic==2.9.2
+
+# Model access and resilience
+openai==1.109.1
+requests==2.34.2
+python-dotenv==1.2.4
+tenacity==9.2.1
+
+# Monitoring and storage
+prometheus-client==0.21.1
+SQLAlchemy==2.0.55
+
+# Testing
+pytest==8.4.2
+pytest-cov==5.0.0
+
+# Utilities
+tqdm==4.70.1
+PyYAML==6.0.3

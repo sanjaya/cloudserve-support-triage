@@ -1,0 +1,11 @@
+.env
+storage/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.DS_Store
+evaluation/results/*
+!evaluation/results/.gitkeep
+data/development_tickets.json
+data/ground_truth_responses.json
