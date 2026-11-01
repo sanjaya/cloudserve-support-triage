@@ -13,7 +13,7 @@ if not config.OPENROUTER_API_KEY or config.OPENROUTER_API_KEY == "your_key_here"
 resp = requests.post(
     "https://openrouter.ai/api/v1/chat/completions",
     headers={"Authorization": f"Bearer {config.OPENROUTER_API_KEY}"},
-    json={"model": config.MODEL_NAME, "messages": [{"role": "user", "content": "Reply with the word ready."}]},
+    json={"model": config.MODEL_NAME, "messages": [{"role": "user", "content": "Reply with the word Sanjaya."}]},
     timeout=30,
 )
 print(resp.status_code)
