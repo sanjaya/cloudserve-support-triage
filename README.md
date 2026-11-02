@@ -9,8 +9,8 @@ half of all tickets are still passed to senior staff. This system:
 - passes every other ticket to a person, with a short summary and the useful articles attached;
 - records every decision and the reason for it, so any answer can be explained later.
 
-> Status: week two. Setup (B-01), ticket reading (B-02) and the run harness (B-05) are done.
-> The other steps are being built.
+> Status: week two. Setup (B-01), ticket reading (B-02), the run harness (B-05) and searching
+> the help articles (B-03, B-04) are done. The other steps are being built.
 
 ## Requirements
 
@@ -38,18 +38,28 @@ python scripts/check_model.py        # should print 200 and "ready"
 # checkpoint: print one normalised ticket per channel
 python -m src.ingest --input data/validation_tickets.json
 
+# compare the two ways of splitting articles and get the minimum-score table
+# (needs data/development_tickets.json, copied from Capstone_Pack/05_Datasets/)
+python scripts/compare_chunking.py
+
 # full unattended run over any ticket file; results go to a dated folder inside --output
 python -m evaluation.harness --input data/validation_tickets.json --output evaluation/results/
 ```
 
-Right now the system is a skeleton: it sends every ticket to a person and says why.
-The real steps (classify, search, decide, answer, check) are added in B-04 to B-09.
+The first run downloads the embedding model (about 90 MB) and builds the search store in
+`storage/`. This happens automatically and takes a minute; later runs reuse both.
+
+Right now the system searches the help articles but still sends every ticket to a person,
+with the reason and the passages it found. Classify, decide, answer and check come in B-06 to B-09.
 
 ## Tests
 
 ```bash
 python -m pytest tests/ -v
 ```
+
+The tests use a small offline stand-in for the embedding model, so they need no internet
+and no API key. They check that the code works, not how good the real model's results are.
 
 ## Repository structure
 

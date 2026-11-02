@@ -1,8 +1,8 @@
 """The steps one ticket goes through.
 
-THIS IS A SKELETON (B-05). For now every ticket is sent to a person, with a reason.
-The real steps are added later: classify (B-06), search documents (B-04),
-decide (B-07), write the answer (B-08) and check the answer (B-09).
+Built so far: searching the help articles (B-04).
+Still to come: classify (B-06), decide (B-07), write the answer (B-08) and check it (B-09).
+Until then every ticket is sent to a person, with a reason and the passages we found.
 The `Result` shape will not change, so the harness and the metrics will keep working
 as each step is added.
 """
@@ -12,8 +12,19 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from src.ingest import Ticket
+from src.retrieve import Retriever
 
 ACTIONS = ("auto_respond", "escalate", "block")
+
+_retriever: Retriever | None = None
+
+
+def get_retriever() -> Retriever:
+    """Create the search store once and reuse it for every ticket."""
+    global _retriever
+    if _retriever is None:
+        _retriever = Retriever()
+    return _retriever
 
 
 @dataclass
@@ -34,7 +45,15 @@ class Result:
 
 
 def process(ticket: Ticket) -> Result:
-    """Run one ticket through all the steps. For now (skeleton) we send every ticket to a person."""
+    """Run one ticket through the steps built so far. For now every ticket goes to a person."""
     if "empty_body" in ticket.issues:
         return Result(ticket.ticket_id, "escalate", "The ticket has no message text, so a person needs to look at it.")
-    return Result(ticket.ticket_id, "escalate", "Automatic answers are not built yet, so a person will handle this ticket.")
+
+    passages = get_retriever().search(ticket.text)
+    sources = [p.passage_id for p in passages]
+    if not passages:
+        reason = "No help article matched this ticket closely enough, so a person will handle it."
+    else:
+        reason = (f"Found {len(passages)} matching help passages, but automatic answers are not "
+                  "built yet, so a person will handle this ticket.")
+    return Result(ticket.ticket_id, "escalate", reason, sources=sources)
