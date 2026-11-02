@@ -1,11 +1,11 @@
 # Data
 
-Committed (small, needed at runtime):
-- `documentation.json` – the 29 knowledge-base articles the system retrieves from.
-- `validation_tickets.json` – the 80 validation tickets used for the full unattended run.
+Saved in the repository (small, and the system needs them to run):
+- `documentation.json` - the 29 help articles the system searches.
+- `validation_tickets.json` - 80 tickets used to test the full run.
 
-Not committed (copy from `Capstone_Pack/05_Datasets/` if you need them):
-- `development_tickets.json` – 500 labelled tickets for development and calibration.
-- `ground_truth_responses.json` – 200 reference answers used in evaluation.
+Not saved here (copy them from `Capstone_Pack/05_Datasets/` if you need them):
+- `development_tickets.json` - 500 tickets with correct answers, used while building.
+- `ground_truth_responses.json` - 200 model answers written by senior agents, used to judge quality.
 
-The hidden evaluation set is never stored here; the harness takes its path as `--input`.
+The hidden test file is never stored here. You give its path to the harness with `--input`.

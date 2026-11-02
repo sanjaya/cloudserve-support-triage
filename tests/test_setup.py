@@ -1,4 +1,4 @@
-"""Setup checks that run without network access or an API key."""
+"""Basic checks that the project is set up. They need no internet and no API key."""
 import json
 
 from src import config

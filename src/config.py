@@ -1,4 +1,4 @@
-"""Central configuration, read from the environment (.env)."""
+"""All settings in one place. Values come from the .env file."""
 import os
 from pathlib import Path
 
@@ -18,5 +18,5 @@ DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{STORAGE_DIR / 'decisions.d
 CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", "0.80"))
 RETRIEVAL_TOP_K = int(os.getenv("RETRIEVAL_TOP_K", "5"))
 
-# FR-05: intents that are never answered automatically, whatever the confidence.
+# FR-05: these kinds of tickets always go to a person, however sure the system is.
 BLOCKED_INTENTS = frozenset({"security_incident", "compliance_request", "feature_request", "unclear_request"})

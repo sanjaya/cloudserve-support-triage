@@ -2,12 +2,15 @@
 
 Capstone project, Forward Deployed AI Engineering. Sanjaya Kumar Panigrahy.
 
-CloudServe's documentation already answers about seven in ten tickets, yet more than half are
-escalated. This system answers documented questions from the knowledge base, with citations,
-and hands everything else to a person with a summary and the relevant articles attached.
-Every decision is logged so it can be explained later.
+CloudServe's help articles already answer about seven in ten support tickets, but more than
+half of all tickets are still passed to senior staff. This system:
 
-> Status: week two, day one – environment and project structure (backlog item B-01).
+- answers a ticket from the help articles when it can, and shows which article each answer came from;
+- passes every other ticket to a person, with a short summary and the useful articles attached;
+- records every decision and the reason for it, so any answer can be explained later.
+
+> Status: week two. Setup (B-01), ticket reading (B-02) and the run harness (B-05) are done.
+> The other steps are being built.
 
 ## Requirements
 
@@ -31,12 +34,16 @@ python scripts/check_model.py        # should print 200 and "ready"
 
 ## Run
 
-To be completed as components are built:
-
 ```bash
-# full unattended run over any ticket file
+# checkpoint: print one normalised ticket per channel
+python -m src.ingest --input data/validation_tickets.json
+
+# full unattended run over any ticket file; results go to a dated folder inside --output
 python -m evaluation.harness --input data/validation_tickets.json --output evaluation/results/
 ```
+
+Right now the system is a skeleton: it sends every ticket to a person and says why.
+The real steps (classify, search, decide, answer, check) are added in B-04 to B-09.
 
 ## Tests
 
@@ -48,16 +55,16 @@ python -m pytest tests/ -v
 
 | Path | Contents |
 |---|---|
-| `src/` | Application code, one module per component |
-| `prompts/` | Versioned prompt library (register in `prompts/README.md`) |
-| `tests/` | Test suite |
-| `evaluation/` | Harness, results and analysis |
-| `docs/` | Architecture notes |
-| `data/` | Corpus and validation tickets only (see `data/README.md`) |
-| `scripts/` | Utility scripts, including the Stage 1 data profile |
-| `.github/workflows/` | Continuous integration |
+| `src/` | The system's code, one file per step |
+| `prompts/` | The prompts, with a version number on each (list in `prompts/README.md`) |
+| `tests/` | Automatic tests |
+| `evaluation/` | The run harness, its results and the metrics |
+| `docs/` | How the system is designed |
+| `data/` | Help articles and validation tickets only (see `data/README.md`) |
+| `scripts/` | Small helper scripts, including the Stage 1 data analysis |
+| `.github/workflows/` | Runs the tests automatically on every push |
 
 ## Attribution
 
-Parts of this repository were drafted with AI assistance (Claude); see the AI tool-use
-declaration in the project report. Third-party libraries are listed in `requirements.txt`.
+Parts of this code were written with help from an AI assistant (Claude). The project report
+says where. Other people's libraries are listed in `requirements.txt`.
