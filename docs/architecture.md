@@ -11,3 +11,48 @@ Each ticket goes through six steps:
 
 Every decision is recorded with its reason. If any step fails, the ticket goes to a person.
 More detail is added here as each step is built (see the Stage 3 specifications, FR-01 to FR-12).
+
+## How the steps are joined: LangGraph
+
+The Project Brief names "LangChain with LangGraph" for orchestration. The flow is a LangGraph
+graph in `src/graph.py`; `pipeline.process()` runs one ticket through it, and the harness
+calls `process()` for every ticket.
+
+```mermaid
+graph TD
+    START([start]) --> check_input
+    check_input -. has text .-> classify
+    check_input -. has text .-> search
+    check_input -. no text .-> hand_off
+    classify --> decide
+    search --> decide
+    decide -. "B-07: not sure / blocked topic" .-> hand_off
+    hand_off --> END([end])
+```
+
+- Classify and search do not depend on each other, so they run side by side; decide waits for both.
+- Decide is a placeholder until B-07 and always hands off. B-07 adds a second route,
+  decide -> draft (B-08) -> safety checks (B-09) -> reply, with a route back to hand_off
+  whenever a check fails.
+- `python -m src.graph` prints the current graph as a Mermaid diagram.
+
+## What LangChain does, and what is our own code
+
+| Step | LangChain / LangGraph part | Our own code | Why our own code |
+|---|---|---|---|
+| Joining the steps | LangGraph `StateGraph` | the nodes in `src/graph.py` | – |
+| Read & clean (B-02) | – | `src/ingest.py` | Plain data cleaning; nothing in LangChain does it |
+| Splitting articles (B-03) | – | `split_by_section` in `src/retrieve.py` | Splitting by the article's own sections won the measured comparison |
+| Search (B-04) | `langchain-chroma` (`Chroma`), `HuggingFaceEmbeddings` | minimum score, passage ids for citations | – |
+| Model call (B-06 and later) | `ChatOpenAI` (OpenRouter), `ChatPromptTemplate`, messages | answer cache, waiting and retrying, counting calls | So runs are repeatable, stay inside rate limits, and the metrics can report the number of calls |
+| Classify (B-06) | – | trained classifier, agreement cases, measured confidence | Our own measured design (Stage 5, change 2); LangChain has no part for it |
+
+Prompts stay as versioned files in `prompts/`. `src/llm.py` turns each file into a LangChain
+`ChatPromptTemplate`. The text sent is exactly the same as before the move, so saved answers
+in the cache still match.
+
+## Search settings
+
+Chroma's search is approximate (HNSW). Its default setting checks too few candidates when we
+ask for 10 passages, and could miss close ones. `INDEX_SETTINGS` in `src/retrieve.py` raises it
+so the result matches checking every passage (tested in `tests/test_retrieve.py`).

@@ -8,6 +8,8 @@ How it works:
    scripts/compare_chunking.py measures which one finds the right article more often.
 2. Each passage is turned into numbers (an "embedding") and saved in Chroma, a small
    database that runs inside this program and keeps its files in storage/.
+   We use Chroma through LangChain (langchain-chroma), and the embedding model through
+   LangChain's HuggingFaceEmbeddings, as the Setup Guide does.
 3. To search, the ticket text is turned into numbers the same way, and Chroma returns
    the passages that are closest in meaning.
 4. Passages that are not similar enough (score below RETRIEVAL_MIN_SCORE) are dropped.
@@ -22,11 +24,21 @@ import hashlib
 import json
 import math
 import re
+import threading
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
+
+from langchain_core.embeddings import Embeddings
 
 from src import config
+
+# Chroma's search is approximate ("HNSW"). With its default setting (search_ef 10) it can miss
+# some of the closest passages when we ask for 10 of them. A higher value makes it check
+# enough candidates that, for our 116 passages, the result is the same as checking every one.
+# Changing these settings, or this version, rebuilds the store.
+INDEX_SETTINGS = {"hnsw:space": "cosine", "hnsw:search_ef": 200, "hnsw:construction_ef": 200}
+STORE_VERSION = "2"
 
 # ---------------------------------------------------------------- passages
 
@@ -91,25 +103,34 @@ def load_articles(path: Path | None = None) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------- embeddings
 
 
-class Embedder(Protocol):
-    name: str
+class SentenceTransformerEmbedder(Embeddings):
+    """The real model, all-MiniLM-L6-v2, through LangChain's HuggingFaceEmbeddings.
+    Downloaded (about 90 MB) on first use, then cached.
 
-    def embed(self, texts: list[str]) -> list[list[float]]: ...
-
-
-class SentenceTransformerEmbedder:
-    """The real model, all-MiniLM-L6-v2. Downloaded (about 90 MB) on first use, then cached."""
+    It is a LangChain "Embeddings" object, so Chroma can use it directly. embed() is a short
+    name for embed_documents(), used by the trained classifier."""
 
     def __init__(self, model_name: str):
-        from sentence_transformers import SentenceTransformer  # imported here: slow to load
+        from langchain_huggingface import HuggingFaceEmbeddings  # imported here: slow to load
         self.name = model_name
-        self._model = SentenceTransformer(model_name)
+        # normalize_embeddings=True: the same numbers the classifier was trained on.
+        self._model = HuggingFaceEmbeddings(model_name=model_name,
+                                            encode_kwargs={"normalize_embeddings": True})
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        # One embedding at a time: classify and search run side by side in the graph, and
+        # the model is shared, so we do not let two threads use it at once.
+        with _MODEL_LOCK:
+            return self._model.embed_documents(texts)
+
+    def embed_query(self, text: str) -> list[float]:
+        return self.embed_documents([text])[0]
 
     def embed(self, texts: list[str]) -> list[list[float]]:
-        return self._model.encode(texts, normalize_embeddings=True, show_progress_bar=False).tolist()
+        return self.embed_documents(texts)
 
 
-class HashingEmbedder:
+class HashingEmbedder(Embeddings):
     """A tiny offline stand-in used ONLY by the automatic tests, so they run without
     downloading the real model. It matches words, not meaning. Never use it for results."""
 
@@ -118,7 +139,7 @@ class HashingEmbedder:
     def __init__(self, dims: int = 512):
         self.dims = dims
 
-    def embed(self, texts: list[str]) -> list[list[float]]:
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
         vectors = []
         for text in texts:
             v = [0.0] * self.dims
@@ -128,10 +149,27 @@ class HashingEmbedder:
             vectors.append([x / norm for x in v])
         return vectors
 
+    def embed_query(self, text: str) -> list[float]:
+        return self.embed_documents([text])[0]
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        return self.embed_documents(texts)
+
+
+Embedder = SentenceTransformerEmbedder | HashingEmbedder
+
+
+_MODEL_LOCK = threading.RLock()
+_embedders: dict[str, Embedder] = {}
+
 
 def get_embedder(name: str | None = None) -> Embedder:
+    """The embedding model, loaded once per run and shared by search and the classifier."""
     name = name or config.EMBEDDING_MODEL
-    return HashingEmbedder() if name == "hashing" else SentenceTransformerEmbedder(name)
+    with _MODEL_LOCK:
+        if name not in _embedders:
+            _embedders[name] = HashingEmbedder() if name == "hashing" else SentenceTransformerEmbedder(name)
+        return _embedders[name]
 
 
 # ---------------------------------------------------------------- store and search
@@ -152,28 +190,38 @@ class Retriever:
         self.top_k = top_k or config.RETRIEVAL_TOP_K
         self.articles = load_articles(articles_path)
 
-        client = chromadb.PersistentClient(path=store_path or config.CHROMA_PATH,
-                                           settings=Settings(anonymized_telemetry=False))
-        name = f"docs_{self.strategy}_{_slug(self.embedder.name)}"[:60]
+        self._client = chromadb.PersistentClient(path=store_path or config.CHROMA_PATH,
+                                                 settings=Settings(anonymized_telemetry=False))
+        self._name = f"docs_{self.strategy}_{_slug(self.embedder.name)}"[:60]
         fingerprint = self._fingerprint()
-        self.collection = client.get_or_create_collection(name, metadata={"hnsw:space": "cosine"})
+        self.store = self._open(INDEX_SETTINGS)
         if (self.collection.metadata or {}).get("fingerprint") != fingerprint or self.collection.count() == 0:
-            client.delete_collection(name)
-            self.collection = client.create_collection(
-                name, metadata={"hnsw:space": "cosine", "fingerprint": fingerprint})
+            self.store.delete_collection()
+            self.store = self._open({**INDEX_SETTINGS, "fingerprint": fingerprint})
             self._build()
 
+    def _open(self, metadata: dict[str, Any]):
+        """Open (or create) the collection as a LangChain Chroma store (see INDEX_SETTINGS)."""
+        from langchain_chroma import Chroma
+        return Chroma(client=self._client, collection_name=self._name,
+                      embedding_function=self.embedder, collection_metadata=metadata)
+
+    @property
+    def collection(self):
+        """The underlying Chroma collection (used by the tests to look inside the store)."""
+        return self.store._collection
+
     def _fingerprint(self) -> str:
-        raw = json.dumps(self.articles, sort_keys=True) + self.strategy + self.embedder.name
+        raw = (json.dumps(self.articles, sort_keys=True) + self.strategy + self.embedder.name
+               + STORE_VERSION + json.dumps(INDEX_SETTINGS, sort_keys=True))
         return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
     def _build(self) -> None:
         passages = [p for doc in self.articles for p in SPLITTERS[self.strategy](doc)]
-        self.collection.add(
-            ids=[p.passage_id for p in passages],
-            documents=[p.text for p in passages],
-            embeddings=self.embedder.embed([p.text for p in passages]),
+        self.store.add_texts(
+            texts=[p.text for p in passages],
             metadatas=[{"doc_id": p.doc_id, "title": p.title, "section": p.section} for p in passages],
+            ids=[p.passage_id for p in passages],
         )
 
     @property
@@ -187,18 +235,18 @@ class Retriever:
             return []
         k = min(top_k or self.top_k, self.passage_count)
         threshold = self.min_score if min_score is None else min_score
-        found = self.collection.query(query_embeddings=self.embedder.embed([text]), n_results=k)
         passages = []
-        for pid, doc, meta, dist in zip(found["ids"][0], found["documents"][0],
-                                        found["metadatas"][0], found["distances"][0]):
-            score = round(1.0 - dist, 4)       # cosine distance -> similarity
+        for doc, distance in self.store.similarity_search_with_score(text, k=k):
+            score = round(1.0 - distance, 4)       # cosine distance -> similarity
             if score >= threshold:
-                passages.append(Passage(pid, meta["doc_id"], meta["title"], meta["section"], doc, score))
+                meta = doc.metadata
+                passages.append(Passage(doc.id, meta["doc_id"], meta["title"], meta["section"],
+                                        doc.page_content, score))
         return passages
 
     def get(self, passage_id: str) -> Passage | None:
         """Look up one passage by id – used to check that a citation points to a real passage."""
-        got = self.collection.get(ids=[passage_id])
+        got = self.store.get(ids=[passage_id])
         if not got["ids"]:
             return None
         meta = got["metadatas"][0]

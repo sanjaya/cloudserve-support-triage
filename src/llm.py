@@ -1,9 +1,12 @@
 """Talking to the language model (used by B-06 now, and later by B-08 and B-09).
 
 How it works:
-- The provider is OpenRouter. It uses the same "OpenAI-style" API as many providers, so we
-  talk to it with the standard openai library, pointed at OpenRouter's address.
-  The model is chosen in .env (LLM_MODEL); names ending in ":free" cost nothing.
+- The provider is OpenRouter. We talk to it through LangChain's ChatOpenAI, pointed at
+  OpenRouter's address (OpenRouter uses the same "OpenAI-style" API as many providers).
+  The model is chosen in .env (LLM_MODEL).
+- Prompts are files in prompts/. render() turns a prompt file into a LangChain
+  ChatPromptTemplate and fills in the ticket. The prompt version stays in the file name,
+  so the decision log can show which version made each decision.
 - temperature is 0, so the same ticket gets the same answer as far as the model allows.
 - If you choose a "reasoning" model (one that thinks before answering), set
   LLM_REASONING_EFFORT=low: we then ask it to think briefly, keep the thinking out of the
@@ -12,6 +15,8 @@ How it works:
   exact same question again, we read the saved answer and make no call. This saves the
   free allowance and makes runs repeatable.
 - If the provider says "too many requests", or times out, we wait and try again a few times.
+  We do this waiting ourselves (not LangChain's), so we can space calls out and count them
+  for the metrics report.
   If it still fails, we raise LLMError. The caller decides what to do (usually: send the
   ticket to a person). One failing call never crashes a whole run.
 """
@@ -49,11 +54,40 @@ def load_prompt(relative_path: str) -> tuple[str, str]:
 
 
 def fill(template: str, values: dict[str, str]) -> str:
-    """Put values into {placeholders}. We do not use str.format, because the prompts
-    also contain JSON examples with { and } that must stay as they are."""
+    """Put values into {placeholders} with plain text replacement (kept for simple uses;
+    render() below is what the pipeline uses)."""
     for key, value in values.items():
         template = template.replace("{" + key + "}", value)
     return template
+
+
+_PLACEHOLDER = re.compile(r"\{\{([a-z_]+)\}\}")
+
+
+def prompt_template(relative_path: str):
+    """Turn a prompt file into a LangChain ChatPromptTemplate (a system and a user message).
+
+    LangChain treats every { } as a placeholder, but our prompts also contain JSON examples
+    with { and }. So we first make every brace literal ({{ and }}), then turn only the real
+    placeholders in the USER part ({channel}, {body}, ...) back into placeholders.
+    The SYSTEM part has no placeholders and stays exactly as written."""
+    from langchain_core.prompts import ChatPromptTemplate
+
+    system, user = load_prompt(relative_path)
+
+    def literal(text: str) -> str:
+        return text.replace("{", "{{").replace("}", "}}")
+
+    return ChatPromptTemplate.from_messages([
+        ("system", literal(system)),
+        ("human", _PLACEHOLDER.sub(r"{\1}", literal(user))),
+    ])
+
+
+def render(relative_path: str, values: dict[str, str]) -> tuple[str, str]:
+    """Fill a prompt file with values and return (system text, user text), ready to send."""
+    messages = prompt_template(relative_path).format_messages(**values)
+    return messages[0].content, messages[1].content
 
 
 def parse_json(text: str) -> dict:
@@ -113,21 +147,26 @@ class LLMClient:
         self._min_interval = config.LLM_MIN_INTERVAL_S if min_interval_s is None else min_interval_s
         self._last_call = 0.0
         self._cache = _Cache(Path(cache_path or config.LLM_CACHE_PATH))
-        self._client = None
         self.calls_made = 0       # real calls to the provider (for the metrics report)
         self.cache_hits = 0
 
-    def _openai(self):
+    def _chat_model(self, max_tokens: int):
+        """LangChain's ChatOpenAI, pointed at OpenRouter."""
         if config.LLM_DISABLED:
             raise LLMError("language model calls are switched off (LLM_DISABLED)")
         if not self._api_key or self._api_key == "your_key_here":
             raise LLMError("no OpenRouter API key set; add OPENROUTER_API_KEY to .env")
-        if self._client is None:
-            from openai import OpenAI
-            # max_retries=0: we do our own waiting and retrying below, so we can count it.
-            self._client = OpenAI(base_url=self._base_url, api_key=self._api_key,
-                                  timeout=self._timeout, max_retries=0)
-        return self._client
+        from langchain_openai import ChatOpenAI
+
+        # The token limit is sent as "max_tokens", the name OpenRouter documents
+        # (ChatOpenAI would otherwise rename it to "max_completion_tokens").
+        extra: dict = {"max_tokens": max_tokens}
+        if config.LLM_REASONING_EFFORT:      # reasoning models only (e.g. gpt-oss)
+            extra["reasoning"] = {"effort": config.LLM_REASONING_EFFORT, "exclude": True}
+            extra["max_tokens"] = max_tokens + config.LLM_REASONING_BUDGET
+        # max_retries=0: we do our own waiting and retrying in complete(), so we can count it.
+        return ChatOpenAI(model=self.model, api_key=self._api_key, base_url=self._base_url,
+                          temperature=0, timeout=self._timeout, max_retries=0, extra_body=extra)
 
     def complete(self, system: str, user: str, max_tokens: int = 400) -> str:
         """Ask the model one question and return its text reply (from the cache if seen before)."""
@@ -139,11 +178,14 @@ class LLMClient:
             return cached
 
         import openai
+        from langchain_core.messages import HumanMessage, SystemMessage
         from tenacity import (RetryError, retry, retry_if_exception_type, stop_after_attempt,
                               wait_exponential)
 
         retryable = (openai.RateLimitError, openai.APITimeoutError, openai.APIConnectionError,
                      openai.InternalServerError)
+        model = self._chat_model(max_tokens)
+        messages = [SystemMessage(content=system), HumanMessage(content=user)]
 
         @retry(retry=retry_if_exception_type(retryable), stop=stop_after_attempt(self._max_attempts),
                wait=wait_exponential(multiplier=2, min=2, max=30), reraise=False)
@@ -152,17 +194,11 @@ class LLMClient:
             if wait > 0:
                 time.sleep(wait)
             self._last_call = time.monotonic()
-            extra = {}
-            limit = max_tokens
-            if config.LLM_REASONING_EFFORT:      # reasoning models only (e.g. gpt-oss)
-                extra = {"extra_body": {"reasoning": {"effort": config.LLM_REASONING_EFFORT, "exclude": True}}}
-                limit = max_tokens + config.LLM_REASONING_BUDGET
-            response = self._openai().chat.completions.create(
-                model=self.model, temperature=0, max_tokens=limit,
-                messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
-                **extra)
+            response = model.invoke(messages)
             self.calls_made += 1
-            return response.choices[0].message.content or ""
+            content = response.content
+            return content if isinstance(content, str) else "".join(
+                part.get("text", "") if isinstance(part, dict) else str(part) for part in content)
 
         try:
             reply = _call()

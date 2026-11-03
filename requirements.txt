@@ -1,14 +1,15 @@
-# Pinned top-level dependencies. Resolves cleanly on Python 3.10-3.12
-# (checked with `uv pip compile` on 3.10 and 3.12). The pack's original
+# Pinned top-level dependencies. Resolves cleanly on Python 3.10-3.13
+# (checked with `uv pip compile` on 3.10 and 3.13). The pack's original
 # requirements.txt does not install: openai==1.0.0 conflicts with
 # langchain-openai==0.0.7, and pydantic==2.0.0 conflicts with fastapi==0.104.0.
 
-# Orchestration
-langchain==0.3.30
-langgraph==0.2.76
-langchain-community==0.3.31
-langchain-openai==0.3.35
-langchain-huggingface==0.1.2
+# Orchestration (LangChain with LangGraph, as the Project Brief's stack table says)
+langchain==0.3.30            # brings langchain-core: prompt templates and messages (src/llm.py)
+langgraph==0.2.76            # the ticket flow as a graph (src/graph.py)
+langchain-community==0.3.31  # not used by our code yet; kept from the pack's list
+langchain-openai==0.3.35     # ChatOpenAI, pointed at OpenRouter (src/llm.py)
+langchain-huggingface==0.1.2 # HuggingFaceEmbeddings for all-MiniLM-L6-v2 (src/retrieve.py)
+langchain-chroma==0.2.3      # Chroma through LangChain (src/retrieve.py)
 
 # Vector store and embeddings
 chromadb==0.5.20

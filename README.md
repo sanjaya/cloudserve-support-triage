@@ -60,6 +60,12 @@ Right now the system classifies each ticket and searches the help articles, but 
 every ticket to a person, with the reason, the labels and the passages it found. Decide,
 answer and check come in B-07 to B-09.
 
+How the steps are joined: the ticket flow is a LangGraph graph (`src/graph.py`). Classify and
+search run side by side, then decide, then hand-off (or, from B-07, an answer). To see the graph:
+`python -m src.graph` prints it as a Mermaid diagram. LangChain is used for the model call
+(`ChatOpenAI` pointed at OpenRouter, prompts as `ChatPromptTemplate`) and for search
+(`langchain-chroma` with `HuggingFaceEmbeddings`). See `docs/architecture.md`.
+
 How tickets are classified: the language model decides what the ticket is about, and a small
 trained classifier (`models/classifier.joblib`, committed) checks that answer. The confidence is
 how often that case (both agree / partly agree / disagree) was actually right on the development
@@ -92,4 +98,13 @@ and no API key. They check that the code works, not how good the real model's re
 ## Attribution
 
 Parts of this code were written with help from an AI assistant (Claude). The project report
-says where. Other people's libraries are listed in `requirements.txt`.
+says where. Other people's libraries are listed in `requirements.txt`; the main ones are:
+
+| Library | Used for | Where |
+|---|---|---|
+| LangGraph (LangChain Inc., MIT licence) | The ticket flow as a graph | `src/graph.py` |
+| LangChain: langchain-core, langchain-openai, langchain-huggingface, langchain-chroma (MIT licence) | Prompt templates, the model call, embeddings, the vector store | `src/llm.py`, `src/retrieve.py` |
+| Chroma (Apache 2.0) | Storing and searching the passages | through langchain-chroma |
+| sentence-transformers, all-MiniLM-L6-v2 (Apache 2.0) | Turning text into embeddings | through langchain-huggingface |
+| scikit-learn (BSD) | The trained classifier (logistic regression) | `src/classify.py` |
+| OpenRouter, Meta Llama 3.1 8B Instruct | The language model | called from `src/llm.py` |

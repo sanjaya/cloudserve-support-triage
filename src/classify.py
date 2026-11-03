@@ -38,7 +38,7 @@ from typing import Any
 
 from src import config
 from src.ingest import Ticket
-from src.llm import LLMClient, LLMError, fill, get_client, load_prompt
+from src.llm import LLMClient, LLMError, get_client, render
 
 PROMPT_FILE = "build/PR-02_classify_intent_urgency_v1.0.md"
 PROMPT_VERSION = "PR-02 v1.0"
@@ -174,8 +174,8 @@ class TrainedClassifier:
 def ask_llm(ticket: Ticket, client: LLMClient | None = None) -> dict[str, Any]:
     """Ask the language model to classify the ticket with prompt PR-02. Raises LLMError
     if it fails or answers with a label that does not exist."""
-    system, template = load_prompt(PROMPT_FILE)
-    user = fill(template, {"channel": ticket.channel, "subject": ticket.subject, "body": ticket.body})
+    system, user = render(PROMPT_FILE, {"channel": ticket.channel, "subject": ticket.subject,
+                                        "body": ticket.body})
     reply = (client or get_client()).complete_json(system, user, max_tokens=200)
     intent, urgency = reply.get("intent"), reply.get("urgency")
     if intent not in config.INTENTS:
@@ -237,7 +237,7 @@ class Classifier:
         try:
             return self._classify(ticket)
         except Exception as exc:   # last line of defence: a person handles the ticket
-            return fallback(f"Classification failed ({type(exc).__name__}); sent to a person.")
+            return fallback(f"Classification failed ({type(exc).__name__}: {exc}); sent to a person.")
 
     def _classify(self, ticket: Ticket) -> Classification:
         ranked, trained_urgency = self.trained.predict(ticket.text) if self.trained else ([], None)

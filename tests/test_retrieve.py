@@ -83,3 +83,24 @@ def test_store_is_rebuilt_when_articles_change(tmp_path):
 def test_unknown_split_method_is_refused(tmp_path):
     with pytest.raises(ValueError):
         Retriever(strategy="paragraph", embedder=HashingEmbedder(), store_path=str(tmp_path))
+
+
+def test_search_finds_the_true_closest_passages(retriever):
+    """Chroma's search is approximate; with INDEX_SETTINGS it must match checking every passage."""
+    import numpy as np
+    emb = HashingEmbedder()
+    passages = [p for a in ARTICLES for p in split_by_section(a)]
+    matrix = np.array(emb.embed_documents([p.text for p in passages]))
+    tickets = json.loads((config.DATA_DIR / "validation_tickets.json").read_text())[:30]
+    for t in tickets:
+        text = f"{t.get('subject') or ''}\n{t.get('body') or ''}".strip()
+        scores = matrix @ np.array(emb.embed_query(text))
+        exact = {passages[i].passage_id for i in np.argsort(-scores)[:10]}
+        found = {p.passage_id for p in retriever.search(text, top_k=10)}
+        assert len(exact & found) >= 9          # ties at the cut-off may swap one passage
+
+
+def test_store_uses_langchain_chroma(retriever):
+    from langchain_chroma import Chroma
+    assert isinstance(retriever.store, Chroma)
+    assert retriever.collection.metadata["hnsw:space"] == "cosine"

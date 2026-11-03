@@ -1,5 +1,8 @@
 """The steps one ticket goes through.
 
+The order of the steps is a LangGraph graph, defined in src/graph.py. This file holds what
+the steps share: the Result shape, and the classifier and search store (loaded once).
+
 Built so far: classifying the ticket (B-06) and searching the help articles (B-04).
 Still to come: decide (B-07), write the answer (B-08) and check it (B-09).
 Until then every ticket is sent to a person, with a reason, its labels and the passages found.
@@ -34,6 +37,8 @@ def get_classifier() -> Classifier:
     global _classifier
     if _classifier is None:
         _classifier = Classifier()
+        if _classifier.trained is not None:
+            _classifier.trained.predict("warm up")   # load the embedding model now, once
     return _classifier
 
 
@@ -51,25 +56,14 @@ class Result:
     error: str | None = None          # filled in if a step failed and the ticket went to a person
     alternatives: list[dict[str, Any]] = field(default_factory=list)  # other intents considered (B-06)
     classifier_method: str | None = None  # how the intent was decided (B-06): see src/classify.py
+    classifier_note: str | None = None    # anything the classifier wants a person to know, e.g. why it fell back
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
 def process(ticket: Ticket) -> Result:
-    """Run one ticket through the steps built so far. For now every ticket goes to a person."""
-    if "empty_body" in ticket.issues:
-        return Result(ticket.ticket_id, "escalate", "The ticket has no message text, so a person needs to look at it.")
-
-    label = get_classifier().classify(ticket)
-    passages = get_retriever().search(ticket.text)
-    sources = [p.passage_id for p in passages]
-    about = f"Looks like {label.intent.replace('_', ' ')} ({label.urgency} urgency, {label.confidence:.0%} sure). "
-    if not passages:
-        reason = about + "No help article matched closely enough, so a person will handle it."
-    else:
-        reason = (about + f"Found {len(passages)} matching help passages, but automatic answers are not "
-                  "built yet, so a person will handle this ticket.")
-    return Result(ticket.ticket_id, "escalate", reason, intent=label.intent, urgency=label.urgency,
-                  confidence=label.confidence, sources=sources, alternatives=label.alternatives,
-                  classifier_method=label.method)
+    """Run one ticket through the graph (src/graph.py). For now every ticket goes to a person."""
+    from src.graph import get_graph
+    get_retriever(), get_classifier()      # load both before the graph runs steps side by side
+    return get_graph().invoke({"ticket": ticket})["result"]

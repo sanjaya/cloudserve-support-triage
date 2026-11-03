@@ -13,7 +13,7 @@ from src import config
 from src.classify import (LEVELS, UNCALIBRATED, Classifier, TrainedClassifier, agreement_level,
                           near_duplicate_groups)
 from src.ingest import load_raw, normalise
-from src.llm import LLMClient, LLMError, fill, load_prompt, parse_json
+from src.llm import LLMClient, LLMError, fill, load_prompt, parse_json, prompt_template, render
 from src.retrieve import HashingEmbedder
 
 RAW = load_raw(config.DATA_DIR / "validation_tickets.json")
@@ -170,6 +170,28 @@ def test_prompt_file_has_system_and_user_parts():
     assert "ROLE:" in system and "{body}" in user
 
 
+def test_langchain_prompt_gives_exactly_the_same_text_as_plain_filling():
+    # Same text means the same cache key, so answers saved before the LangChain move still count.
+    system, template = load_prompt("build/PR-02_classify_intent_urgency_v1.0.md")
+    for t in TICKETS:
+        values = {"channel": t.channel, "subject": t.subject, "body": t.body}
+        assert render("build/PR-02_classify_intent_urgency_v1.0.md", values) == (system, fill(template, values))
+
+
+def test_every_prompt_file_loads_as_a_langchain_template():
+    import re
+    for path in sorted((config.ROOT / "prompts").rglob("PR-*.md")):
+        rel = str(path.relative_to(config.ROOT / "prompts"))
+        _, user = load_prompt(rel)
+        assert set(prompt_template(rel).input_variables) == set(re.findall(r"\{([a-z_]+)\}", user))
+
+
+def test_customer_text_with_braces_is_kept_as_written():
+    values = {"channel": "chat", "subject": "", "body": 'my config is {"region": "eu"} and {body}'}
+    _, user = render("build/PR-02_classify_intent_urgency_v1.0.md", values)
+    assert '{"region": "eu"} and {body}' in user
+
+
 def test_fill_keeps_json_braces():
     out = fill('{"intent": "x"} <ticket>{body}</ticket>', {"body": "hello"})
     assert out == '{"intent": "x"} <ticket>hello</ticket>'
@@ -199,27 +221,27 @@ def _rate_limited():
     return openai.RateLimitError("slow down", response=httpx.Response(429, request=req), body=None)
 
 
-class _FakeOpenAI:
-    """Pretends to be the provider: fails `fails` times with 'too many requests', then answers."""
+class _FakeChatModel:
+    """Pretends to be LangChain's ChatOpenAI: fails `fails` times with 'too many requests',
+    then answers."""
 
     def __init__(self, fails):
         self.fails, self.calls = fails, 0
-        self.chat = self
-        self.completions = self
 
-    def create(self, **kwargs):
+    def invoke(self, messages):
+        from langchain_core.messages import AIMessage
         self.calls += 1
+        assert [m.type for m in messages] == ["system", "human"]
         if self.calls <= self.fails:
             raise _rate_limited()
-        msg = type("M", (), {"content": "ok"})
-        return type("R", (), {"choices": [type("C", (), {"message": msg})]})
+        return AIMessage(content="ok")
 
 
 def test_rate_limit_is_retried_then_succeeds(tmp_path, monkeypatch):
     client = LLMClient(api_key="test", cache_path=str(tmp_path / "c.sqlite"),
                        max_attempts=2, min_interval_s=0)
-    fake = _FakeOpenAI(fails=1)
-    monkeypatch.setattr(client, "_openai", lambda: fake)
+    fake = _FakeChatModel(fails=1)
+    monkeypatch.setattr(client, "_chat_model", lambda max_tokens: fake)
     assert client.complete("s", "u2") == "ok"
     assert fake.calls == 2 and client.calls_made == 1
 
@@ -227,6 +249,15 @@ def test_rate_limit_is_retried_then_succeeds(tmp_path, monkeypatch):
 def test_rate_limit_that_never_ends_raises_llm_error(tmp_path, monkeypatch):
     client = LLMClient(api_key="test", cache_path=str(tmp_path / "c.sqlite"),
                        max_attempts=2, min_interval_s=0)
-    monkeypatch.setattr(client, "_openai", lambda: _FakeOpenAI(fails=99))
+    monkeypatch.setattr(client, "_chat_model", lambda max_tokens: _FakeChatModel(fails=99))
     with pytest.raises(LLMError, match="kept failing"):
         client.complete("s", "u3")
+
+
+def test_chat_model_points_at_openrouter_with_temperature_0(monkeypatch):
+    monkeypatch.setattr(config, "LLM_DISABLED", False)
+    model = LLMClient(api_key="test", min_interval_s=0)._chat_model(200)
+    assert type(model).__name__ == "ChatOpenAI"
+    assert model.openai_api_base == "https://openrouter.ai/api/v1"
+    assert model.temperature == 0 and model.max_retries == 0
+    assert model.extra_body["max_tokens"] == 200
