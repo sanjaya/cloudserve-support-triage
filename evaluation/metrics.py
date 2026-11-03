@@ -50,6 +50,29 @@ def per_class(pairs: list[tuple[str, str]]) -> dict[str, dict[str, Any]]:
     return out
 
 
+def calibration(rows: list[tuple[float, bool]], bands: int = 5) -> list[dict[str, Any]]:
+    """Is the confidence honest? Put predictions into confidence bands (0-0.2, 0.2-0.4, ...)
+    and compare the average stated confidence with how often they were really right.
+    The PRD allows a gap of at most 5 points in each band."""
+    table = []
+    for b in range(bands):
+        low, high = b / bands, (b + 1) / bands
+        group = [(c, ok) for c, ok in rows if low <= c < high or (b == bands - 1 and c == 1.0)]
+        if not group:
+            continue
+        stated = sum(c for c, _ in group) / len(group)
+        observed = sum(ok for _, ok in group) / len(group)
+        table.append({"band": f"{low:.1f}-{high:.1f}", "tickets": len(group),
+                      "stated_pct": round(100 * stated, 1), "observed_pct": round(100 * observed, 1),
+                      "gap_points": round(100 * (stated - observed), 1)})
+    return table
+
+
+def macro_precision(per: dict[str, dict[str, Any]]) -> float | None:
+    values = [v["precision"] for v in per.values() if v["precision"] is not None and v["support"]]
+    return round(100 * sum(values) / len(values), 1) if values else None
+
+
 def compute(records: list[dict[str, Any]], decisions_logged: int | None = None) -> dict[str, Any]:
     n = len(records)
     results = [r["result"] for r in records]
@@ -60,6 +83,12 @@ def compute(records: list[dict[str, Any]], decisions_logged: int | None = None) 
     # Classification: compare our intent with the correct intent, where we have both
     intent_pairs = [(r["labels"]["intent"], r["result"]["intent"])
                     for r in labelled if r["result"].get("intent") and r["labels"].get("intent")]
+    conf_rows = [(r["result"]["confidence"], r["result"]["intent"] == r["labels"]["intent"])
+                 for r in labelled if r["result"].get("intent") and r["result"].get("confidence") is not None
+                 and r["labels"].get("intent")]
+    urgency_pairs = [(r["labels"]["urgency"], r["result"]["urgency"])
+                     for r in labelled if r["result"].get("urgency") and r["labels"].get("urgency")]
+    per = per_class(intent_pairs) if intent_pairs else None
     # Document search "hit": we used at least one of the documents a correct answer should cite
     hit_base = [r for r in labelled if r["labels"].get("expected_doc_ids")]
     hits = sum(1 for r in hit_base
@@ -99,7 +128,12 @@ def compute(records: list[dict[str, Any]], decisions_logged: int | None = None) 
             "response_time_median_s": round(statistics.median(latencies), 3) if latencies else None,
         },
         "technical": {
-            "classification_per_class": per_class(intent_pairs) if intent_pairs else None,
+            "classification_accuracy_pct": _pct(sum(t == p for t, p in intent_pairs), len(intent_pairs)) if intent_pairs else None,
+            "classification_macro_precision_pct": macro_precision(per) if per else None,
+            "classification_per_class": per,
+            "urgency_accuracy_pct": _pct(sum(t == p for t, p in urgency_pairs), len(urgency_pairs)) if urgency_pairs else None,
+            "confidence_calibration": calibration(conf_rows) if conf_rows else None,
+            "classifier_methods": dict(Counter(r.get("classifier_method") for r in results if r.get("classifier_method"))) or None,
             "retrieval_hit_rate_pct": _pct(hits, len(hit_base)) if any(r["result"]["sources"] for r in hit_base) else None,
             "routing_accuracy_pct": _pct(route_ok, len(route_base)),
             "latency_p50_s": _percentile(latencies, 0.50),
@@ -126,6 +160,8 @@ def to_markdown(metrics: dict[str, Any], meta: dict[str, Any]) -> str:
         for k, v in metrics[group].items():
             if k == "classification_per_class" and v:
                 v = f"{len(v)} classes – see metrics.json"
+            if k == "confidence_calibration" and v:
+                v = "; ".join(f"{b['band']}: said {b['stated_pct']}%, right {b['observed_pct']}% (n={b['tickets']})" for b in v)
             lines.append(f"| {k.replace('_', ' ')} | {show(v)} |")
     lines += ["", "Note: response time here is how long the system took per ticket. It is not the same as",
               "the time a customer waits for a first reply. The project report explains the difference."]

@@ -1,0 +1,55 @@
+{
+  "measured_at": "2026-11-03T07:39:09+00:00",
+  "model": "meta-llama/llama-3.1-8b-instruct",
+  "embedder": "all-MiniLM-L6-v2",
+  "development_tickets": 500,
+  "sample": 160,
+  "urgency_source": "trained",
+  "levels": {
+    "agree": {
+      "tickets": 98,
+      "correct": 95,
+      "accuracy": 0.9694,
+      "range_95_pct": [
+        91.4,
+        99.0
+      ]
+    },
+    "in_top3": {
+      "tickets": 24,
+      "correct": 16,
+      "accuracy": 0.6667,
+      "range_95_pct": [
+        46.7,
+        82.0
+      ]
+    },
+    "disagree": {
+      "tickets": 38,
+      "correct": 11,
+      "accuracy": 0.2895,
+      "range_95_pct": [
+        17.0,
+        44.8
+      ]
+    },
+    "llm_only": {
+      "tickets": 160,
+      "correct": 122,
+      "accuracy": 0.7625,
+      "range_95_pct": [
+        69.1,
+        82.2
+      ]
+    },
+    "trained_only": {
+      "tickets": 500,
+      "correct": 372,
+      "accuracy": 0.744,
+      "range_95_pct": [
+        70.4,
+        78.0
+      ]
+    }
+  }
+}

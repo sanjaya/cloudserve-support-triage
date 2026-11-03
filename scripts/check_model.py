@@ -1,21 +1,18 @@
-"""B-01 check: one real call to the model provider must return text.
-Usage: python scripts/check_model.py"""
+"""Check the language model (OpenRouter): one real call must return text.
+
+    python scripts/check_model.py
+"""
 import sys
+import tempfile
+from pathlib import Path
 
-import requests
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from src.llm import LLMClient, LLMError  # noqa: E402
 
-sys.path.insert(0, ".")
-from src import config  # noqa: E402
-
-if not config.OPENROUTER_API_KEY or config.OPENROUTER_API_KEY == "your_key_here":
-    sys.exit("OPENROUTER_API_KEY is not set. Copy .env.example to .env and add your key.")
-
-resp = requests.post(
-    "https://openrouter.ai/api/v1/chat/completions",
-    headers={"Authorization": f"Bearer {config.OPENROUTER_API_KEY}"},
-    json={"model": config.MODEL_NAME, "messages": [{"role": "user", "content": "Reply with the word Sanjaya."}]},
-    timeout=30,
-)
-print(resp.status_code)
-resp.raise_for_status()
-print(resp.json()["choices"][0]["message"]["content"])
+# A fresh, empty cache each time, so this always makes a real call.
+client = LLMClient(cache_path=str(Path(tempfile.mkdtemp()) / "cache.sqlite"))
+try:
+    reply = client.complete("You are a test.", "Reply with the single word ready.", max_tokens=5)
+except LLMError as exc:
+    sys.exit(f"Not working: {exc}")
+print(f"{client.provider} / {client.model}: {reply!r}")
