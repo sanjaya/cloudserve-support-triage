@@ -27,6 +27,7 @@ from tqdm import tqdm
 from evaluation import metrics as M
 from src.guardrails import remember_customers
 from src.logging_store import log_decision, tickets_logged
+from src.monitoring import get_metrics
 from src.ingest import load_raw, normalise
 from src.pipeline import Result, process
 
@@ -39,7 +40,14 @@ def _git_version() -> str:
         return "unknown"
 
 
-def run(input_path: str, output_dir: str, limit: int | None = None) -> Path:
+def run(input_path: str, output_dir: str, limit: int | None = None, metrics_port: int | None = None,
+        pace_s: float = 0.0, keep_serving: bool = False) -> Path:
+    """Process every ticket in the file and write the results and the metrics report.
+
+    metrics_port: also publish live metrics for Prometheus at http://localhost:<port>/metrics (B-12).
+    pace_s:       wait this long between tickets, so a dashboard shows traffic over time.
+    keep_serving: after the run, keep the metrics endpoint open until Ctrl+C, so Prometheus can
+                  read the final numbers."""
     started = datetime.now(timezone.utc)
     raw_tickets = load_raw(input_path)
     if limit:
@@ -49,6 +57,11 @@ def run(input_path: str, output_dir: str, limit: int | None = None) -> Path:
 
     out = Path(output_dir) / started.strftime("run_%Y%m%dT%H%M%SZ")
     out.mkdir(parents=True, exist_ok=True)
+
+    metrics = get_metrics()
+    if metrics_port is not None:
+        port = metrics.serve(metrics_port)
+        print(f"Live metrics at http://localhost:{port}/metrics")
 
     records, log_errors = [], []
     version = _git_version()
@@ -80,6 +93,9 @@ def run(input_path: str, output_dir: str, limit: int | None = None) -> Path:
             }
             records.append(record)
             fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+            metrics.record(ticket, result, latency)          # B-12: live monitoring
+            if pace_s:
+                time.sleep(pace_s)
             try:                     # FR-09: every decision goes to the decision log
                 log_decision(run_id, ticket, result, version)
             except Exception as exc:  # a logging failure is reported, never hidden
@@ -103,6 +119,13 @@ def run(input_path: str, output_dir: str, limit: int | None = None) -> Path:
     report["governance"]["decision_log_errors"] = log_errors[:20] or "none"
     (out / "metrics.json").write_text(json.dumps({"meta": meta, **report}, indent=2), encoding="utf-8")
     (out / "metrics.md").write_text(M.to_markdown(report, meta), encoding="utf-8")
+    if metrics_port is not None and keep_serving:
+        print(f"Run finished; results in {out}. Metrics endpoint stays open for Prometheus - press Ctrl+C to stop.")
+        try:
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            pass
     return out
 
 
@@ -111,8 +134,14 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--input", required=True, help="the ticket file to process")
     parser.add_argument("--output", required=True, help="folder for the results (a new dated folder is made inside it)")
     parser.add_argument("--limit", type=int, default=None, help="only process the first N tickets (for quick tests while building)")
+    parser.add_argument("--metrics-port", type=int, default=None,
+                        help="publish live metrics for Prometheus on this port, e.g. 8001 (B-12)")
+    parser.add_argument("--pace", type=float, default=0.0,
+                        help="seconds to wait between tickets, so the dashboard shows traffic over time")
+    parser.add_argument("--keep-serving", action="store_true",
+                        help="keep the metrics endpoint open after the run, until Ctrl+C")
     args = parser.parse_args(argv)
-    out = run(args.input, args.output, args.limit)
+    out = run(args.input, args.output, args.limit, args.metrics_port, args.pace, args.keep_serving)
     print(f"Done. Results and metrics report in {out}")
 
 

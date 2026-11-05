@@ -11,7 +11,8 @@ half of all tickets are still passed to senior staff. This system:
 
 > Status: week two. Setup (B-01), ticket reading (B-02), the run harness (B-05), searching
 > the help articles (B-03, B-04), classifying tickets (B-06), deciding (B-07), writing the
-> answer (B-08), the safety checks on answers (B-09) and the decision log (B-10) are done.
+> answer (B-08), the safety checks on answers (B-09), the decision log (B-10) and live
+> monitoring with Prometheus and Grafana (B-12) are done.
 
 ## Requirements
 
@@ -65,6 +66,11 @@ python scripts/evaluate_grounding.py
 
 # retrain the classifier (only needed if the data or the embedding model changes)
 python scripts/train_classifier.py
+
+# live monitoring: start Prometheus and Grafana, then run with the metrics switched on
+# (details and the no-Docker route in monitoring/README.md)
+docker compose -f monitoring/docker-compose.yml up -d
+python -m evaluation.harness --input data/validation_tickets.json --output evaluation/results/ --metrics-port 8001 --pace 2 --keep-serving
 
 # see how one ticket was handled, step by step, from the decision log (latest run)
 python -m src.logging_store --ticket VAL-0001
@@ -133,6 +139,7 @@ and no API key. They check that the code works, not how good the real model's re
 | `tests/` | Automatic tests |
 | `evaluation/` | The run harness, its results and the metrics |
 | `docs/` | How the system is designed |
+| `monitoring/` | Prometheus and Grafana set-up and the dashboard (B-12) |
 | `data/` | Help articles and validation tickets only (see `data/README.md`) |
 | `scripts/` | Small helper scripts, including the Stage 1 data analysis |
 | `.github/workflows/` | Runs the tests automatically on every push |

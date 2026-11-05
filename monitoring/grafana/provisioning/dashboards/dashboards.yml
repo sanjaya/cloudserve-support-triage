@@ -1,0 +1,7 @@
+apiVersion: 1
+providers:
+  - name: cloudserve
+    folder: CloudServe
+    type: file
+    options:
+      path: /var/lib/grafana/dashboards

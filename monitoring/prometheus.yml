@@ -1,0 +1,9 @@
+# Prometheus settings for the Docker set-up (docker-compose.yml). Prometheus runs in a container,
+# so it reaches the harness on your machine through host.docker.internal.
+global:
+  scrape_interval: 5s      # short, so a run of a few minutes draws a useful dashboard
+
+scrape_configs:
+  - job_name: "support-system"
+    static_configs:
+      - targets: ["host.docker.internal:8001"]

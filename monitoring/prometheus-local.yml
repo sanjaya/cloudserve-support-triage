@@ -1,0 +1,9 @@
+# Prometheus settings when Prometheus is installed on your machine (for example with Homebrew):
+#   prometheus --config.file=monitoring/prometheus-local.yml
+global:
+  scrape_interval: 5s
+
+scrape_configs:
+  - job_name: "support-system"
+    static_configs:
+      - targets: ["localhost:8001"]
