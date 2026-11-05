@@ -11,7 +11,7 @@ half of all tickets are still passed to senior staff. This system:
 
 > Status: week two. Setup (B-01), ticket reading (B-02), the run harness (B-05), searching
 > the help articles (B-03, B-04), classifying tickets (B-06), deciding (B-07), writing the
-> answer (B-08) and the safety checks on answers (B-09) are done.
+> answer (B-08), the safety checks on answers (B-09) and the decision log (B-10) are done.
 
 ## Requirements
 
@@ -66,6 +66,9 @@ python scripts/evaluate_grounding.py
 # retrain the classifier (only needed if the data or the embedding model changes)
 python scripts/train_classifier.py
 
+# see how one ticket was handled, step by step, from the decision log (latest run)
+python -m src.logging_store --ticket VAL-0001
+
 # full unattended run over any ticket file; results go to a dated folder inside --output
 python -m evaluation.harness --input data/validation_tickets.json --output evaluation/results/
 ```
@@ -85,6 +88,13 @@ other customers' names); promises of refunds, fixes or dates; instructions hidde
 (a code pattern plus prompt PR-06); and whether every claim is supported by the cited passage
 (prompt PR-05). If any check blocks, or cannot run, the answer is not sent (action "block") and
 a person handles the ticket. Every result is recorded in the run's results.
+
+Every decision is also written to the decision log (`src/logging_store.py`, FR-09): a database
+table at `DATABASE_URL` (SQLite `storage/decisions.db` by default, not committed) with one record
+per step per ticket – classify, search, route, draft, safety, final – each with an input summary,
+model, prompt version, prediction, confidence, sources, threshold, action, plain-language reason,
+safety-check results and requirement ids. The metrics report checks that the number of tickets
+logged equals the number processed ("decision log reconciles").
 
 How the decision is made (FR-04, FR-05), first rule that applies wins: could not classify ->
 a person; a never-automate topic (security incident, compliance request, feature request,

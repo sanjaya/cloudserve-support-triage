@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 import subprocess
+import uuid
 import sys
 import time
 from datetime import datetime, timezone
@@ -25,6 +26,7 @@ from tqdm import tqdm
 
 from evaluation import metrics as M
 from src.guardrails import remember_customers
+from src.logging_store import log_decision, tickets_logged
 from src.ingest import load_raw, normalise
 from src.pipeline import Result, process
 
@@ -48,7 +50,11 @@ def run(input_path: str, output_dir: str, limit: int | None = None) -> Path:
     out = Path(output_dir) / started.strftime("run_%Y%m%dT%H%M%SZ")
     out.mkdir(parents=True, exist_ok=True)
 
-    records = []
+    records, log_errors = [], []
+    version = _git_version()
+    # The run's id in the decision log: the folder name plus a short random part, so two runs
+    # started in the same second never share an id.
+    run_id = f"{out.name}_{uuid.uuid4().hex[:6]}"
     with open(out / "results.jsonl", "w", encoding="utf-8") as fh:
         for raw in tqdm(raw_tickets, desc="tickets", unit="ticket"):
             ticket = normalise(raw)
@@ -74,6 +80,10 @@ def run(input_path: str, output_dir: str, limit: int | None = None) -> Path:
             }
             records.append(record)
             fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+            try:                     # FR-09: every decision goes to the decision log
+                log_decision(run_id, ticket, result, version)
+            except Exception as exc:  # a logging failure is reported, never hidden
+                log_errors.append(f"{ticket.ticket_id}: {type(exc).__name__}: {str(exc)[:200]}")
 
     finished = datetime.now(timezone.utc)
     meta = {
@@ -81,9 +91,16 @@ def run(input_path: str, output_dir: str, limit: int | None = None) -> Path:
         "tickets_in_file": len(raw_tickets),
         "started_utc": started.isoformat(timespec="seconds"),
         "duration_s": round((finished - started).total_seconds(), 1),
-        "system_version": _git_version(),
+        "system_version": version,
+        "run_id": run_id,
     }
-    report = M.compute(records, decisions_logged=None)  # the decision log is added in B-10
+    try:
+        logged = tickets_logged(run_id)
+    except Exception as exc:
+        logged, log_errors = None, log_errors + [f"count failed: {type(exc).__name__}: {exc}"]
+    report = M.compute(records, decisions_logged=logged)
+    report["governance"]["decision_log_reconciles"] = (logged == len(records)) if logged is not None else False
+    report["governance"]["decision_log_errors"] = log_errors[:20] or "none"
     (out / "metrics.json").write_text(json.dumps({"meta": meta, **report}, indent=2), encoding="utf-8")
     (out / "metrics.md").write_text(M.to_markdown(report, meta), encoding="utf-8")
     return out

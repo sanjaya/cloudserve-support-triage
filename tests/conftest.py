@@ -17,3 +17,5 @@ os.environ["LLM_CACHE_PATH"] = os.path.join(tempfile.mkdtemp(prefix="llm_cache_t
 # Tests never use the committed model file (it was trained with the real embedding model).
 os.environ["CLASSIFIER_MODEL_PATH"] = os.path.join(tempfile.mkdtemp(prefix="clf_test_"), "none.joblib")
 os.environ["CLASSIFIER_CALIBRATION_PATH"] = os.path.join(tempfile.mkdtemp(prefix="cal_test_"), "none.json")
+# The decision log goes to a temporary database, never storage/decisions.db.
+os.environ["DATABASE_URL"] = "sqlite:///" + os.path.join(tempfile.mkdtemp(prefix="decisions_test_"), "decisions.db")

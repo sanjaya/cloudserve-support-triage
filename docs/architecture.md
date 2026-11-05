@@ -9,7 +9,9 @@ Each ticket goes through six steps:
 5. Answer: write a reply using only those passages, and show the sources.
 6. Check: block the reply if it is unsafe or not supported by the sources.
 
-Every decision is recorded with its reason. If any step fails, the ticket goes to a person.
+Every decision is recorded with its reason in the decision log (`src/logging_store.py`, B-10):
+one record per step per ticket, written by the harness after each ticket, including tickets that
+failed part-way. If any step fails, the ticket goes to a person.
 More detail is added here as each step is built (see the Stage 3 specifications, FR-01 to FR-12).
 
 ## How the steps are joined: LangGraph
