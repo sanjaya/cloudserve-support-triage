@@ -3,9 +3,8 @@
 The order of the steps is a LangGraph graph, defined in src/graph.py. This file holds what
 the steps share: the Result shape, and the classifier and search store (loaded once).
 
-Built so far: classifying the ticket (B-06), searching the help articles (B-04) and deciding
-(B-07). Still to come: write the answer (B-08) and check it (B-09). Until then every ticket is
-sent to a person; the routing decision is recorded so it can already be measured.
+Built so far: classifying the ticket (B-06), searching the help articles (B-04), deciding
+(B-07) and writing the answer (B-08). Still to come: the safety checks on the answer (B-09).
 The `Result` shape only gains optional fields, so the harness and the metrics keep working
 as each step is added.
 """
@@ -16,12 +15,14 @@ from typing import Any
 
 from src.classify import Classifier
 from src.ingest import Ticket
+from src.llm import LLMClient, get_client
 from src.retrieve import Retriever
 
 ACTIONS = ("auto_respond", "escalate", "block")
 
 _retriever: Retriever | None = None
 _classifier: Classifier | None = None
+_llm_client: LLMClient | None = None      # set by tests to a stand-in; otherwise the shared client
 
 
 def get_retriever() -> Retriever:
@@ -42,6 +43,11 @@ def get_classifier() -> Classifier:
     return _classifier
 
 
+def get_llm_client() -> LLMClient:
+    """The language-model client used to write answers (the shared one, unless a test set another)."""
+    return _llm_client or get_client()
+
+
 @dataclass
 class Result:
     ticket_id: str
@@ -57,17 +63,19 @@ class Result:
     alternatives: list[dict[str, Any]] = field(default_factory=list)  # other intents considered (B-06)
     classifier_method: str | None = None  # how the intent was decided (B-06): see src/classify.py
     classifier_note: str | None = None    # anything the classifier wants a person to know, e.g. why it fell back
-    routing_decision: str | None = None   # what decide chose (B-07): auto_respond or escalate. Until B-08
-                                          # writes answers, action stays "escalate" even when this is auto_respond
+    routing_decision: str | None = None   # what decide chose (B-07): auto_respond or escalate. The action
+                                          # can still be "escalate" if the answer could not be written
     routing_rule: str | None = None       # which routing rule decided (see src/route.py)
     threshold: float | None = None        # the confidence threshold applied (B-07)
+    draft: dict[str, Any] | None = None   # the written answer and its checks (B-08), also kept when a
+                                          # person handles the ticket, so they can use it
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
 def process(ticket: Ticket) -> Result:
-    """Run one ticket through the graph (src/graph.py). Until B-08, every ticket still goes to a person."""
+    """Run one ticket through the graph (src/graph.py)."""
     from src.graph import get_graph
     get_retriever(), get_classifier()      # load both before the graph runs steps side by side
     return get_graph().invoke({"ticket": ticket})["result"]

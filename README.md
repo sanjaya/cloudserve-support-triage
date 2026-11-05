@@ -10,8 +10,8 @@ half of all tickets are still passed to senior staff. This system:
 - records every decision and the reason for it, so any answer can be explained later.
 
 > Status: week two. Setup (B-01), ticket reading (B-02), the run harness (B-05), searching
-> the help articles (B-03, B-04), classifying tickets (B-06) and deciding (B-07) are done.
-> The other steps are being built.
+> the help articles (B-03, B-04), classifying tickets (B-06), deciding (B-07) and writing the
+> answer (B-08) are done. The safety checks on answers (B-09) are next.
 
 ## Requirements
 
@@ -51,6 +51,10 @@ python scripts/evaluate_classifier.py --llm-sample 160  # full evaluation, asks 
 # evaluate_classifier.py results, so no model calls)
 python scripts/sweep_threshold.py
 
+# compare versions of the answer prompt PR-03 on development tickets (makes model calls; cached)
+# (copy ground_truth_responses.json from Capstone_Pack/05_Datasets/ into data/ to also check must_not_claim)
+python scripts/evaluate_answers.py
+
 # retrain the classifier (only needed if the data or the embedding model changes)
 python scripts/train_classifier.py
 
@@ -61,10 +65,12 @@ python -m evaluation.harness --input data/validation_tickets.json --output evalu
 The first run downloads the embedding model (about 90 MB) and builds the search store in
 `storage/`. This happens automatically and takes a minute; later runs reuse both.
 
-Right now the system classifies each ticket, searches the help articles and decides whether
-it could be answered automatically (`src/route.py`). It still sends every ticket to a person,
-because writing and checking the answer come in B-08 and B-09; the routing decision and its
-reason are recorded in each result, so routing can already be measured.
+Right now the system classifies each ticket, searches the help articles, decides whether it
+could be answered automatically (`src/route.py`) and, if so, writes the answer from the
+passages with prompt PR-03 (`src/generate.py`). The answer is sent only if the model says the
+articles fully answer the question and every passage it cites is one search found; otherwise a
+person handles the ticket, with the draft attached. The safety checks on the answer (private
+data, unsupported claims, promises) come in B-09.
 
 How the decision is made (FR-04, FR-05), first rule that applies wins: could not classify ->
 a person; a never-automate topic (security incident, compliance request, feature request,

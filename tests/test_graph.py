@@ -84,19 +84,68 @@ def test_search_and_classifier_share_one_embedding_model():
     assert get_embedder("hashing") is get_embedder("hashing")
 
 
-def test_ticket_routed_automatic_goes_through_draft_and_keeps_the_decision(steps, monkeypatch):
-    classifier, retriever = steps
-    sure = Classifier(client=FakeLLM())
-    sure.accuracy = {k: 0.97 for k in sure.accuracy}           # pretend the measured confidence is high
-    monkeypatch.setattr(pipeline, "_classifier", sure)
-    ticket = next(t for t in TICKETS if retriever.search(t.text))
+class TwoPromptLLM:
+    """Answers the classification prompt (PR-02) and the answer prompt (PR-03) differently.
+    For PR-03 it cites the first passage it was given, or replies with `status`."""
+
+    def __init__(self, status="answered"):
+        self.status = status
+
+    def complete_json(self, system, user, max_tokens=400):
+        import re
+        if "You draft replies" not in system:
+            return {"intent": "rate_limit", "urgency": "low", "confidence": 0.9}
+        first = re.search(r"\[(DOC-[^\]]+)\]", user).group(1)
+        if self.status != "answered":
+            return {"status": self.status, "answer": "", "citations": [], "unanswered_points": ["the plan limits"]}
+        return {"status": "answered", "answer": f"Hello, please follow the steps [{first}].",
+                "citations": [first], "unanswered_points": []}
+
+
+@pytest.fixture
+def sure(steps, monkeypatch):
+    """A classifier whose measured confidence is high, so tickets with passages are routed automatic."""
+    clf = Classifier(client=TwoPromptLLM())
+    clf.accuracy = {k: 0.97 for k in clf.accuracy}
+    monkeypatch.setattr(pipeline, "_classifier", clf)
+    return next(t for t in TICKETS if steps[1].search(t.text))
+
+
+def nodes_run(ticket):
     seen = []
     for chunk in graph.build_graph().stream({"ticket": ticket}, stream_mode="updates"):
         seen.extend(chunk)
-    assert seen[-2:] == ["draft", "hand_off"]
-    out = pipeline.process(ticket)
+    return seen
+
+
+def test_usable_answer_is_sent_with_citation_and_disclosure(sure, monkeypatch):
+    monkeypatch.setattr(pipeline, "_llm_client", TwoPromptLLM("answered"))
+    assert nodes_run(sure)[-2:] == ["draft", "reply"]
+    out = pipeline.process(sure)
+    assert out.action == "auto_respond" and out.routing_decision == "auto_respond"
+    assert out.answer.endswith("a member of the support team will follow up.")
+    assert set(out.draft["citations"]) <= set(out.sources)              # T-06a
+    assert out.draft["send"] is True and out.draft["prompt_version"].startswith("PR-03 v")
+
+
+def test_insufficient_answer_goes_to_a_person_with_the_draft_T06b(sure, monkeypatch):
+    monkeypatch.setattr(pipeline, "_llm_client", TwoPromptLLM("insufficient"))
+    assert nodes_run(sure)[-2:] == ["draft", "hand_off"]
+    out = pipeline.process(sure)
     assert out.action == "escalate" and out.routing_decision == "auto_respond"
-    assert out.routing_rule == "all_conditions_met" and "B-08" in out.reason
+    assert out.answer is None and out.draft["status"] == "insufficient"
+    assert "the plan limits" in out.reason
+
+
+def test_model_down_while_writing_goes_to_a_person(sure, monkeypatch):
+    from src.llm import LLMError
+
+    class Down(TwoPromptLLM):
+        def complete_json(self, system, user, max_tokens=400):
+            raise LLMError("provider down")
+    monkeypatch.setattr(pipeline, "_llm_client", Down())
+    out = pipeline.process(sure)
+    assert out.action == "escalate" and out.draft["check"] == "model_failed" and "provider down" in out.reason
 
 
 def test_same_ticket_twice_gives_the_same_decision_T04a(steps):

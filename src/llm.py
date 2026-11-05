@@ -103,7 +103,9 @@ def parse_json(text: str) -> dict:
         depth -= ch == "}"
         if depth == 0:
             try:
-                return json.loads(text[start:i + 1])
+                # strict=False: models often put real line breaks inside the answer text,
+                # which strict JSON does not allow. We accept them.
+                return json.loads(text[start:i + 1], strict=False)
             except json.JSONDecodeError as exc:
                 raise LLMError(f"reply JSON could not be read: {exc}") from exc
     raise LLMError("reply JSON was not complete")

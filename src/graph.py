@@ -2,10 +2,11 @@
 
 Each step is a "node". The graph says which node runs after which:
 
-    START -> check_input --(no text)-------------------------------------> hand_off -> END
+    START -> check_input --(no text)-----------------------------------------> hand_off -> END
                          \\-> classify --\\
-                         \\-> search   ----> decide --(a person)----------> hand_off -> END
-                                                   \\--(automatic)-> draft -> hand_off -> END
+                         \\-> search   ----> decide --(a person)--------------> hand_off -> END
+                                                   \\--(automatic)-> draft --(not usable)-> hand_off -> END
+                                                                         \\--(usable)----> reply -> END
 
 - check_input : a ticket with no message text goes straight to a person.
 - classify    : what the ticket is about and how urgent (src/classify.py, B-06).
@@ -13,12 +14,12 @@ Each step is a "node". The graph says which node runs after which:
   classify and search do not depend on each other, so they run side by side;
   decide waits until both have finished.
 - decide      : answer automatically or send to a person, by the rules in src/route.py (B-07).
-- draft       : writes the answer (B-08). Not built yet: for now it records that the ticket
-                would have been answered automatically, and passes it to hand_off.
-- hand_off    : builds the Result, with the reason.
+- draft       : writes the answer from the passages and checks its citations (src/generate.py, B-08).
+- reply       : the answer goes to the customer (action "auto_respond").
+- hand_off    : the ticket goes to a person, with the reason and any draft attached.
 
-B-08 and B-09 replace the draft placeholder with: draft -> safety checks -> reply, with a
-route back to hand_off whenever a check fails. The harness keeps calling pipeline.process().
+B-09 adds the safety checks between draft and reply, with a route to hand_off whenever a
+check fails. The harness keeps calling pipeline.process().
 
 To print the graph as a Mermaid diagram:  python -m src.graph
 """
@@ -29,6 +30,7 @@ from typing import Any, TypedDict
 from langgraph.graph import END, START, StateGraph
 
 from src.classify import Classification
+from src.generate import Draft, generate
 from src.ingest import Ticket
 from src.retrieve import Passage
 from src.route import AUTO, RouteDecision, route
@@ -40,6 +42,7 @@ class TicketState(TypedDict, total=False):
     classification: Classification
     passages: list[Passage]
     decision: RouteDecision    # what decide chose, with the rule and the reason
+    answer_draft: Draft        # the written answer and whether it passed its checks
     reason: str                # why, in words a support manager can read
     result: Any                # the final pipeline.Result
 
@@ -81,28 +84,43 @@ def after_decide(state: TicketState) -> str:
 
 
 def draft(state: TicketState) -> dict:
-    """B-08 placeholder. The ticket would be answered automatically, but writing the answer is
-    not built yet, so a person still handles it. The routing decision is kept in the result,
-    so the metrics can already measure routing."""
-    return {"reason": state["decision"].reason + " Answer writing (B-08) is not built yet, "
-                                                  "so for now a person will handle it."}
+    """Write the answer from the passages and check it (src/generate.py)."""
+    from src.pipeline import get_llm_client
+    d = generate(state["ticket"], state["classification"], state["passages"], client=get_llm_client())
+    return {"answer_draft": d, "reason": d.reason}
+
+
+def after_draft(state: TicketState) -> str:
+    """A usable answer goes to the customer; anything else to a person."""
+    return "reply" if state["answer_draft"].send else "hand_off"
+
+
+def _result(state: TicketState, action: str, reason: str):
+    from src.pipeline import Result
+    label, decision, d = state["classification"], state["decision"], state.get("answer_draft")
+    return Result(state["ticket"].ticket_id, action, reason, intent=label.intent,
+                  urgency=label.urgency, confidence=label.confidence,
+                  sources=[p.passage_id for p in state.get("passages", [])],
+                  answer=d.answer if (d and action == AUTO) else None,
+                  alternatives=label.alternatives, classifier_method=label.method,
+                  classifier_note=label.note or None, routing_decision=decision.route,
+                  routing_rule=decision.rule, threshold=decision.threshold,
+                  draft=d.to_dict() if d else None)
+
+
+def reply(state: TicketState) -> dict:
+    d = state["answer_draft"]
+    return {"result": _result(state, AUTO, state["decision"].reason + " " + d.reason)}
 
 
 def hand_off(state: TicketState) -> dict:
     from src.pipeline import Result
     ticket = state["ticket"]
-    label = state.get("classification")
-    if label is None:              # came straight from check_input
+    if state.get("classification") is None:      # came straight from check_input
         return {"result": Result(ticket.ticket_id, "escalate",
                                  "The ticket has no message text, so a person needs to look at it.",
                                  routing_decision="escalate", routing_rule="no_text")}
-    decision = state["decision"]
-    return {"result": Result(ticket.ticket_id, "escalate", state["reason"], intent=label.intent,
-                             urgency=label.urgency, confidence=label.confidence,
-                             sources=[p.passage_id for p in state.get("passages", [])],
-                             alternatives=label.alternatives, classifier_method=label.method,
-                             classifier_note=label.note or None, routing_decision=decision.route,
-                             routing_rule=decision.rule, threshold=decision.threshold)}
+    return {"result": _result(state, "escalate", state["reason"])}
 
 
 # ------------------------------------------------------------------ the graph
@@ -115,13 +133,15 @@ def build_graph():
     graph.add_node("search", search)
     graph.add_node("decide", decide)
     graph.add_node("draft", draft)
+    graph.add_node("reply", reply)
     graph.add_node("hand_off", hand_off)
 
     graph.add_edge(START, "check_input")
     graph.add_conditional_edges("check_input", has_text, ["classify", "search", "hand_off"])
     graph.add_edge(["classify", "search"], "decide")       # decide waits for both
     graph.add_conditional_edges("decide", after_decide, ["draft", "hand_off"])
-    graph.add_edge("draft", "hand_off")                   # until B-08/B-09 are built
+    graph.add_conditional_edges("draft", after_draft, ["reply", "hand_off"])   # B-09 goes in between
+    graph.add_edge("reply", END)
     graph.add_edge("hand_off", END)
     return graph.compile()
 

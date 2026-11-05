@@ -106,6 +106,20 @@ def compute(records: list[dict[str, Any]], decisions_logged: int | None = None) 
     unsafe_auto = sum(1 for r in labelled
                       if r["labels"].get("must_not_auto_respond") and r["result"]["action"] == "auto_respond")
     unsafe_routed = sum(1 for r in routed_auto_labelled if r["labels"].get("must_not_auto_respond"))
+    final_ok = sum(1 for r in route_base
+                   if (r["result"]["action"] == "auto_respond") == (r["labels"]["expected_route"] == "auto_respond"))
+
+    # Answers (B-08)
+    drafts = [r["result"]["draft"] for r in records if r["result"].get("draft")]
+    sent = [r for r in records if r["result"]["action"] == "auto_respond"]
+    sent_cites = [(r, (r["result"].get("draft") or {}).get("citations") or []) for r in sent]
+    cites_found = sum(1 for r, c in sent_cites if c and set(c) <= set(r["result"]["sources"]))
+    sent_with_docs = [(r, c) for r, c in sent_cites if r.get("labels", {}).get("expected_doc_ids")]
+    cites_expected = sum(1 for r, c in sent_with_docs
+                         if {x.split("#")[0] for x in c} & set(r["labels"]["expected_doc_ids"]))
+    unanswerable_routed = [r for r in routed_auto_labelled if r["labels"].get("answerable_from_docs") is False]
+    unanswerable_stopped = sum(1 for r in unanswerable_routed if r["result"]["action"] != "auto_respond")
+    disclosed = sum(1 for r in sent if "drafted automatically" in (r["result"].get("answer") or ""))
 
     guardrail_blocks = Counter()
     for res in results:
@@ -149,6 +163,12 @@ def compute(records: list[dict[str, Any]], decisions_logged: int | None = None) 
                 sum(1 for r in routed_auto_labelled if r["result"].get("intent") == r["labels"].get("intent")),
                 len(routed_auto_labelled)) if routed_auto_labelled else None,
             "routing_rules": dict(Counter(r.get("routing_rule") for r in results if r.get("routing_rule"))) or None,
+            "final_action_accuracy_pct": _pct(final_ok, len(route_base)),
+            "answer_statuses": dict(Counter(d.get("status") for d in drafts)) or None,
+            "answer_checks": dict(Counter(d.get("check") for d in drafts)) or None,
+            "replies_with_all_citations_found_pct": _pct(cites_found, len(sent)),
+            "replies_citing_an_expected_article_pct": _pct(cites_expected, len(sent_with_docs)),
+            "unanswerable_routed_tickets_stopped_pct": _pct(unanswerable_stopped, len(unanswerable_routed)),
             "latency_p50_s": _percentile(latencies, 0.50),
             "latency_p95_s": _percentile(latencies, 0.95),
         },
@@ -158,6 +178,7 @@ def compute(records: list[dict[str, Any]], decisions_logged: int | None = None) 
             "private_data_detections": guardrail_blocks.get("pii", 0),
             "auto_responses_on_never_automate_tickets": unsafe_auto,
             "routed_automatic_on_never_automate_tickets": unsafe_routed,
+            "replies_with_automatic_disclosure_pct": _pct(disclosed, len(sent)),
         },
         "segments": segments,
     }

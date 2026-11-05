@@ -197,6 +197,10 @@ def test_fill_keeps_json_braces():
     assert out == '{"intent": "x"} <ticket>hello</ticket>'
 
 
+def test_parse_json_accepts_line_breaks_inside_text():
+    assert parse_json('{"answer": "Hello,\n1. Open the page."}') == {"answer": "Hello,\n1. Open the page."}
+
+
 def test_parse_json_ignores_fences_and_extra_words():
     assert parse_json('Sure!\n```json\n{"intent": "rate_limit", "n": {"a": 1}}\n```') == {"intent": "rate_limit", "n": {"a": 1}}
     with pytest.raises(LLMError):

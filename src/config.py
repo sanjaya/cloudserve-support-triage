@@ -37,6 +37,12 @@ RETRIEVAL_STRATEGY = os.getenv("RETRIEVAL_STRATEGY", "section")
 # development-set sweep in scripts/compare_chunking.py (see Stage 5 revision log, change 1).
 RETRIEVAL_MIN_SCORE = float(os.getenv("RETRIEVAL_MIN_SCORE", "0.35"))
 
+# Which version of prompt PR-03 writes the answers (B-08): "1.0" or "1.1".
+# 1.1 chosen 5 Nov on development tickets (scripts/evaluate_answers.py): it sends 56 of 62
+# answerable tickets, against 13 for 1.0. Neither version can tell which tickets the articles
+# cannot answer (Stage 5 revision log).
+ANSWER_PROMPT_VERSION = os.getenv("ANSWER_PROMPT_VERSION", "1.1")
+
 # Classifier (B-06). The trained model file is committed, so a clean checkout can use it.
 CLASSIFIER_MODEL_PATH = os.getenv("CLASSIFIER_MODEL_PATH", str(ROOT / "models" / "classifier.joblib"))
 # The measured accuracy of each agreement case (written by scripts/evaluate_classifier.py,
