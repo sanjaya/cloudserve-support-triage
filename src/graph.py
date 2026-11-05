@@ -2,11 +2,12 @@
 
 Each step is a "node". The graph says which node runs after which:
 
-    START -> check_input --(no text)-----------------------------------------> hand_off -> END
+    START -> check_input --(no text)--------------------------------------------------> hand_off -> END
                          \\-> classify --\\
-                         \\-> search   ----> decide --(a person)--------------> hand_off -> END
-                                                   \\--(automatic)-> draft --(not usable)-> hand_off -> END
-                                                                         \\--(usable)----> reply -> END
+                         \\-> search   ----> decide --(a person)-----------------------> hand_off -> END
+                                                   \\--(automatic)-> draft --(not usable)----------> hand_off -> END
+                                                                         \\--(usable)-> check --(blocked)-> hand_off -> END
+                                                                                            \\--(passed)--> reply -> END
 
 - check_input : a ticket with no message text goes straight to a person.
 - classify    : what the ticket is about and how urgent (src/classify.py, B-06).
@@ -15,11 +16,13 @@ Each step is a "node". The graph says which node runs after which:
   decide waits until both have finished.
 - decide      : answer automatically or send to a person, by the rules in src/route.py (B-07).
 - draft       : writes the answer from the passages and checks its citations (src/generate.py, B-08).
+- check       : the safety checks on the answer (src/guardrails.py, B-09). Every check runs and
+                every result is recorded; any block, or a check that could not run, stops the answer.
 - reply       : the answer goes to the customer (action "auto_respond").
-- hand_off    : the ticket goes to a person, with the reason and any draft attached.
+- hand_off    : the ticket goes to a person, with the reason and any draft attached (action
+                "escalate", or "block" when the safety checks stopped the answer).
 
-B-09 adds the safety checks between draft and reply, with a route to hand_off whenever a
-check fails. The harness keeps calling pipeline.process().
+The harness keeps calling pipeline.process().
 
 To print the graph as a Mermaid diagram:  python -m src.graph
 """
@@ -31,6 +34,7 @@ from langgraph.graph import END, START, StateGraph
 
 from src.classify import Classification
 from src.generate import Draft, generate
+from src.guardrails import GuardrailReport, check_answer
 from src.ingest import Ticket
 from src.retrieve import Passage
 from src.route import AUTO, RouteDecision, route
@@ -43,6 +47,7 @@ class TicketState(TypedDict, total=False):
     passages: list[Passage]
     decision: RouteDecision    # what decide chose, with the rule and the reason
     answer_draft: Draft        # the written answer and whether it passed its checks
+    safety: GuardrailReport    # the safety checks on the answer
     reason: str                # why, in words a support manager can read
     result: Any                # the final pipeline.Result
 
@@ -91,13 +96,26 @@ def draft(state: TicketState) -> dict:
 
 
 def after_draft(state: TicketState) -> str:
-    """A usable answer goes to the customer; anything else to a person."""
-    return "reply" if state["answer_draft"].send else "hand_off"
+    """A usable answer goes to the safety checks; anything else to a person."""
+    return "check" if state["answer_draft"].send else "hand_off"
+
+
+def check(state: TicketState) -> dict:
+    """Run every safety check on the answer (src/guardrails.py)."""
+    from src.pipeline import get_llm_client
+    report = check_answer(state["ticket"], state["classification"], state["answer_draft"],
+                          state["passages"], client=get_llm_client())
+    return {"safety": report, "reason": report.reason}
+
+
+def after_check(state: TicketState) -> str:
+    return "reply" if state["safety"].passed else "hand_off"
 
 
 def _result(state: TicketState, action: str, reason: str):
     from src.pipeline import Result
     label, decision, d = state["classification"], state["decision"], state.get("answer_draft")
+    safety = state.get("safety")
     return Result(state["ticket"].ticket_id, action, reason, intent=label.intent,
                   urgency=label.urgency, confidence=label.confidence,
                   sources=[p.passage_id for p in state.get("passages", [])],
@@ -105,7 +123,9 @@ def _result(state: TicketState, action: str, reason: str):
                   alternatives=label.alternatives, classifier_method=label.method,
                   classifier_note=label.note or None, routing_decision=decision.route,
                   routing_rule=decision.rule, threshold=decision.threshold,
-                  draft=d.to_dict() if d else None)
+                  draft=d.to_dict() if d else None,
+                  guardrails=dict(safety.results) if safety else {},
+                  guardrail_notes=dict(safety.notes) if safety else {})
 
 
 def reply(state: TicketState) -> dict:
@@ -120,7 +140,8 @@ def hand_off(state: TicketState) -> dict:
         return {"result": Result(ticket.ticket_id, "escalate",
                                  "The ticket has no message text, so a person needs to look at it.",
                                  routing_decision="escalate", routing_rule="no_text")}
-    return {"result": _result(state, "escalate", state["reason"])}
+    blocked = state.get("safety") is not None and not state["safety"].passed
+    return {"result": _result(state, "block" if blocked else "escalate", state["reason"])}
 
 
 # ------------------------------------------------------------------ the graph
@@ -133,6 +154,7 @@ def build_graph():
     graph.add_node("search", search)
     graph.add_node("decide", decide)
     graph.add_node("draft", draft)
+    graph.add_node("check", check)
     graph.add_node("reply", reply)
     graph.add_node("hand_off", hand_off)
 
@@ -140,7 +162,8 @@ def build_graph():
     graph.add_conditional_edges("check_input", has_text, ["classify", "search", "hand_off"])
     graph.add_edge(["classify", "search"], "decide")       # decide waits for both
     graph.add_conditional_edges("decide", after_decide, ["draft", "hand_off"])
-    graph.add_conditional_edges("draft", after_draft, ["reply", "hand_off"])   # B-09 goes in between
+    graph.add_conditional_edges("draft", after_draft, ["check", "hand_off"])
+    graph.add_conditional_edges("check", after_check, ["reply", "hand_off"])
     graph.add_edge("reply", END)
     graph.add_edge("hand_off", END)
     return graph.compile()

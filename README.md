@@ -10,8 +10,8 @@ half of all tickets are still passed to senior staff. This system:
 - records every decision and the reason for it, so any answer can be explained later.
 
 > Status: week two. Setup (B-01), ticket reading (B-02), the run harness (B-05), searching
-> the help articles (B-03, B-04), classifying tickets (B-06), deciding (B-07) and writing the
-> answer (B-08) are done. The safety checks on answers (B-09) are next.
+> the help articles (B-03, B-04), classifying tickets (B-06), deciding (B-07), writing the
+> answer (B-08) and the safety checks on answers (B-09) are done.
 
 ## Requirements
 
@@ -55,6 +55,14 @@ python scripts/sweep_threshold.py
 # (copy ground_truth_responses.json from Capstone_Pack/05_Datasets/ into data/ to also check must_not_claim)
 python scripts/evaluate_answers.py
 
+# test the safety checks with engineered cases (another customer's data, hidden instructions,
+# an unsupported claim, a refund promise, a fix date) and two answers that must pass
+python scripts/check_guardrails.py
+
+# compare versions of the grounding check PR-05 on development answers (uses the
+# evaluate_answers.py output; makes model calls, cached)
+python scripts/evaluate_grounding.py
+
 # retrain the classifier (only needed if the data or the embedding model changes)
 python scripts/train_classifier.py
 
@@ -69,8 +77,14 @@ Right now the system classifies each ticket, searches the help articles, decides
 could be answered automatically (`src/route.py`) and, if so, writes the answer from the
 passages with prompt PR-03 (`src/generate.py`). The answer is sent only if the model says the
 articles fully answer the question and every passage it cites is one search found; otherwise a
-person handles the ticket, with the draft attached. The safety checks on the answer (private
-data, unsupported claims, promises) come in B-09.
+person handles the ticket, with the draft attached.
+
+Before an answer is sent, every safety check runs on it (`src/guardrails.py`, FR-07): the
+never-automate list again; private data (email addresses, phone numbers, customer ids, keys,
+other customers' names); promises of refunds, fixes or dates; instructions hidden in the ticket
+(a code pattern plus prompt PR-06); and whether every claim is supported by the cited passage
+(prompt PR-05). If any check blocks, or cannot run, the answer is not sent (action "block") and
+a person handles the ticket. Every result is recorded in the run's results.
 
 How the decision is made (FR-04, FR-05), first rule that applies wins: could not classify ->
 a person; a never-automate topic (security incident, compliance request, feature request,

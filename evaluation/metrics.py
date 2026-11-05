@@ -121,11 +121,14 @@ def compute(records: list[dict[str, Any]], decisions_logged: int | None = None) 
     unanswerable_stopped = sum(1 for r in unanswerable_routed if r["result"]["action"] != "auto_respond")
     disclosed = sum(1 for r in sent if "drafted automatically" in (r["result"].get("answer") or ""))
 
-    guardrail_blocks = Counter()
+    guardrail_blocks, guardrail_errors = Counter(), Counter()
     for res in results:
         for name, outcome in res.get("guardrails", {}).items():
             if outcome == "block":
                 guardrail_blocks[name] += 1
+            elif outcome == "error":
+                guardrail_errors[name] += 1
+    checked = sum(1 for res in results if res.get("guardrails"))
 
     # For the fairness audit (B-14): how often each customer group got an automatic answer
     segments: dict[str, dict[str, Any]] = {}
@@ -174,8 +177,10 @@ def compute(records: list[dict[str, Any]], decisions_logged: int | None = None) 
         },
         "governance": {
             "decisions_logged": decisions_logged,
+            "answers_safety_checked": checked,
             "guardrail_activations_by_type": dict(guardrail_blocks),
-            "private_data_detections": guardrail_blocks.get("pii", 0),
+            "guardrail_checks_that_could_not_run": dict(guardrail_errors),
+            "private_data_detections": guardrail_blocks.get("private_data", 0),
             "auto_responses_on_never_automate_tickets": unsafe_auto,
             "routed_automatic_on_never_automate_tickets": unsafe_routed,
             "replies_with_automatic_disclosure_pct": _pct(disclosed, len(sent)),

@@ -4,7 +4,7 @@ The order of the steps is a LangGraph graph, defined in src/graph.py. This file 
 the steps share: the Result shape, and the classifier and search store (loaded once).
 
 Built so far: classifying the ticket (B-06), searching the help articles (B-04), deciding
-(B-07) and writing the answer (B-08). Still to come: the safety checks on the answer (B-09).
+(B-07), writing the answer (B-08) and the safety checks on it (B-09).
 The `Result` shape only gains optional fields, so the harness and the metrics keep working
 as each step is added.
 """
@@ -51,14 +51,15 @@ def get_llm_client() -> LLMClient:
 @dataclass
 class Result:
     ticket_id: str
-    action: str                       # what we did: auto_respond, escalate or block
+    action: str                       # what we did: auto_respond, escalate, or block (safety checks stopped the answer)
     reason: str                       # why, in words a support manager can read
     intent: str | None = None         # what the ticket is about (added in B-06)
     urgency: str | None = None        # high, medium or low (added in B-06)
     confidence: float | None = None   # how sure we are, from 0 to 1 (added in B-06)
     sources: list[str] = field(default_factory=list)   # document passages used (added in B-04)
     answer: str | None = None         # reply sent to the customer, only for auto_respond (B-08)
-    guardrails: dict[str, str] = field(default_factory=dict)  # each safety check: pass or block (B-09)
+    guardrails: dict[str, str] = field(default_factory=dict)  # each safety check: pass, block or error (B-09)
+    guardrail_notes: dict[str, str] = field(default_factory=dict)  # what each check found (B-09)
     error: str | None = None          # filled in if a step failed and the ticket went to a person
     alternatives: list[dict[str, Any]] = field(default_factory=list)  # other intents considered (B-06)
     classifier_method: str | None = None  # how the intent was decided (B-06): see src/classify.py

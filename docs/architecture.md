@@ -28,7 +28,9 @@ graph TD
     search --> decide
     decide -. "a person (src/route.py rules)" .-> hand_off
     decide -. "automatic" .-> draft
-    draft -. "usable answer" .-> reply
+    draft -. "usable answer" .-> check
+    check -. "all checks pass" .-> reply
+    check -. "any check blocks" .-> hand_off
     draft -. "not answered / bad citation" .-> hand_off
     reply --> END([end])
     hand_off --> END
@@ -42,7 +44,10 @@ graph TD
   model must say the articles fully answer the question, and every passage it cites must be one
   search found. Otherwise the ticket goes to a person with the draft attached. The line saying
   the reply was drafted automatically is added by code if missing.
-- B-09 adds the safety checks between draft and reply, with a route to hand_off when one fails.
+- Check runs every safety check on the answer (`src/guardrails.py`, B-09): never-automate list
+  again, private data, promises (code patterns), instructions in the ticket (code pattern and
+  PR-06), and grounding (PR-05). All results are recorded; any block, or a check that could not
+  run, stops the answer (action "block") and sends the ticket to a person.
 - `python -m src.graph` prints the current graph as a Mermaid diagram.
 
 ## What LangChain does, and what is our own code
@@ -56,6 +61,7 @@ graph TD
 | Model call (B-06 and later) | `ChatOpenAI` (OpenRouter), `ChatPromptTemplate`, messages | answer cache, waiting and retrying, counting calls | So runs are repeatable, stay inside rate limits, and the metrics can report the number of calls |
 | Classify (B-06) | – | trained classifier, agreement cases, measured confidence | Our own measured design (Stage 5, change 2); LangChain has no part for it |
 | Write the answer (B-08) | the model call (`ChatOpenAI`, `ChatPromptTemplate` from PR-03) | citation and status checks in `src/generate.py` | The checks must be plain code so a bad citation can never reach a customer |
+| Safety checks (B-09) | the model calls for PR-05 and PR-06 | the private-data and promise patterns, and the rule that any block or error stops the answer | Code checks are exact and free; a check that cannot run must stop the answer, not let it through |
 | Decide (B-07) | the conditional edge out of decide | the rules in `src/route.py` | Must be plain code so the same ticket always gets the same decision (FR-04) |
 
 Prompts stay as versioned files in `prompts/`. `src/llm.py` turns each file into a LangChain

@@ -88,11 +88,17 @@ class TwoPromptLLM:
     """Answers the classification prompt (PR-02) and the answer prompt (PR-03) differently.
     For PR-03 it cites the first passage it was given, or replies with `status`."""
 
-    def __init__(self, status="answered"):
-        self.status = status
+    def __init__(self, status="answered", grounding="pass"):
+        self.status, self.grounding = status, grounding
 
     def complete_json(self, system, user, max_tokens=400):
         import re
+        if "security filter" in system:                                    # PR-06
+            return {"injection_suspected": False, "confidence": 0.05, "evidence": ""}
+        if "strict fact-checker" in system:                                # PR-05
+            bad = self.grounding == "block"
+            return {"claims": [{"sentence": "x", "cited": [], "verdict": "unsupported" if bad else "supported"}],
+                    "forbidden_commitment": False, "unsupported_count": int(bad), "decision": self.grounding}
         if "You draft replies" not in system:
             return {"intent": "rate_limit", "urgency": "low", "confidence": 0.9}
         first = re.search(r"\[(DOC-[^\]]+)\]", user).group(1)
@@ -120,12 +126,23 @@ def nodes_run(ticket):
 
 def test_usable_answer_is_sent_with_citation_and_disclosure(sure, monkeypatch):
     monkeypatch.setattr(pipeline, "_llm_client", TwoPromptLLM("answered"))
-    assert nodes_run(sure)[-2:] == ["draft", "reply"]
+    assert nodes_run(sure)[-3:] == ["draft", "check", "reply"]
     out = pipeline.process(sure)
     assert out.action == "auto_respond" and out.routing_decision == "auto_respond"
     assert out.answer.endswith("a member of the support team will follow up.")
     assert set(out.draft["citations"]) <= set(out.sources)              # T-06a
     assert out.draft["send"] is True and out.draft["prompt_version"].startswith("PR-03 v")
+    assert out.guardrails == {k: "pass" for k in ("never_automate", "private_data", "commitment",
+                                                   "injection", "grounding")}      # T-07b: recorded when passed
+
+
+def test_answer_stopped_by_a_safety_check_is_blocked_and_goes_to_a_person(sure, monkeypatch):
+    monkeypatch.setattr(pipeline, "_llm_client", TwoPromptLLM("answered", grounding="block"))
+    assert nodes_run(sure)[-3:] == ["draft", "check", "hand_off"]
+    out = pipeline.process(sure)
+    assert out.action == "block" and out.answer is None
+    assert out.guardrails["grounding"] == "block" and "unsupported claim" in out.reason
+    assert out.draft["answer"]                                             # the draft stays attached
 
 
 def test_insufficient_answer_goes_to_a_person_with_the_draft_T06b(sure, monkeypatch):

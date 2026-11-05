@@ -43,6 +43,10 @@ RETRIEVAL_MIN_SCORE = float(os.getenv("RETRIEVAL_MIN_SCORE", "0.35"))
 # cannot answer (Stage 5 revision log).
 ANSWER_PROMPT_VERSION = os.getenv("ANSWER_PROMPT_VERSION", "1.1")
 
+# Which version of prompt PR-05 checks that answers are supported (B-09): "1.0" or "1.1".
+# Compared on development answers with scripts/evaluate_grounding.py.
+GROUNDING_PROMPT_VERSION = os.getenv("GROUNDING_PROMPT_VERSION", "1.0")
+
 # Classifier (B-06). The trained model file is committed, so a clean checkout can use it.
 CLASSIFIER_MODEL_PATH = os.getenv("CLASSIFIER_MODEL_PATH", str(ROOT / "models" / "classifier.joblib"))
 # The measured accuracy of each agreement case (written by scripts/evaluate_classifier.py,

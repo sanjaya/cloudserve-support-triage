@@ -24,6 +24,7 @@ from pathlib import Path
 from tqdm import tqdm
 
 from evaluation import metrics as M
+from src.guardrails import remember_customers
 from src.ingest import load_raw, normalise
 from src.pipeline import Result, process
 
@@ -41,6 +42,8 @@ def run(input_path: str, output_dir: str, limit: int | None = None) -> Path:
     raw_tickets = load_raw(input_path)
     if limit:
         raw_tickets = raw_tickets[:limit]
+
+    remember_customers(raw_tickets)      # so the private-data check knows every customer name in the file
 
     out = Path(output_dir) / started.strftime("run_%Y%m%dT%H%M%SZ")
     out.mkdir(parents=True, exist_ok=True)
