@@ -10,7 +10,8 @@ half of all tickets are still passed to senior staff. This system:
 - records every decision and the reason for it, so any answer can be explained later.
 
 > Status: week two. Setup (B-01), ticket reading (B-02), the run harness (B-05), searching
-> the help articles (B-03, B-04) and classifying tickets (B-06) are done. The other steps are being built.
+> the help articles (B-03, B-04), classifying tickets (B-06) and deciding (B-07) are done.
+> The other steps are being built.
 
 ## Requirements
 
@@ -46,6 +47,10 @@ python scripts/compare_chunking.py
 python scripts/evaluate_classifier.py                   # trained classifier only, no API calls
 python scripts/evaluate_classifier.py --llm-sample 160  # full evaluation, asks the language model (OpenRouter)
 
+# choose the confidence threshold for automatic answers (development tickets; uses the
+# evaluate_classifier.py results, so no model calls)
+python scripts/sweep_threshold.py
+
 # retrain the classifier (only needed if the data or the embedding model changes)
 python scripts/train_classifier.py
 
@@ -56,9 +61,16 @@ python -m evaluation.harness --input data/validation_tickets.json --output evalu
 The first run downloads the embedding model (about 90 MB) and builds the search store in
 `storage/`. This happens automatically and takes a minute; later runs reuse both.
 
-Right now the system classifies each ticket and searches the help articles, but still sends
-every ticket to a person, with the reason, the labels and the passages it found. Decide,
-answer and check come in B-07 to B-09.
+Right now the system classifies each ticket, searches the help articles and decides whether
+it could be answered automatically (`src/route.py`). It still sends every ticket to a person,
+because writing and checking the answer come in B-08 and B-09; the routing decision and its
+reason are recorded in each result, so routing can already be measured.
+
+How the decision is made (FR-04, FR-05), first rule that applies wins: could not classify ->
+a person; a never-automate topic (security incident, compliance request, feature request,
+unclear request) -> a person, however sure; confidence below `CONFIDENCE_THRESHOLD` -> a person;
+no help passage matched -> a person; otherwise -> answer automatically. The decision is plain
+code, so the same ticket always gets the same decision.
 
 How the steps are joined: the ticket flow is a LangGraph graph (`src/graph.py`). Classify and
 search run side by side, then decide, then hand-off (or, from B-07, an answer). To see the graph:

@@ -24,28 +24,30 @@ def steps(tmp_path, monkeypatch):
     return classifier, retriever
 
 
-def old_process(ticket, classifier, retriever):
-    """The step-by-step code from before the move to LangGraph (commit 4e44e35)."""
+def expected(ticket, classifier, retriever):
+    """What the graph should give: classify, search and the routing rules, run one after another."""
+    from src.route import AUTO, route
     label = classifier.classify(ticket)
     passages = retriever.search(ticket.text)
-    about = f"Looks like {label.intent.replace('_', ' ')} ({label.urgency} urgency, {label.confidence:.0%} sure). "
-    reason = (about + "No help article matched closely enough, so a person will handle it." if not passages
-              else about + f"Found {len(passages)} matching help passages, but automatic answers are not "
-              "built yet, so a person will handle this ticket.")
+    decision = route(label, passages)
+    reason = decision.reason
+    if decision.route == AUTO:
+        reason += " Answer writing (B-08) is not built yet, so for now a person will handle it."
     return pipeline.Result(ticket.ticket_id, "escalate", reason, intent=label.intent, urgency=label.urgency,
                            confidence=label.confidence, sources=[p.passage_id for p in passages],
                            alternatives=label.alternatives, classifier_method=label.method,
-                           classifier_note=label.note or None)
+                           classifier_note=label.note or None, routing_decision=decision.route,
+                           routing_rule=decision.rule, threshold=decision.threshold)
 
 
-def test_graph_gives_the_same_result_as_before(steps):
+def test_graph_gives_the_same_result_as_the_steps_run_by_hand(steps):
     for t in TICKETS[:20]:
-        assert pipeline.process(t) == old_process(t, *steps)
+        assert pipeline.process(t) == expected(t, *steps)
 
 
 def test_graph_has_the_planned_steps():
     nodes = set(graph.build_graph().get_graph().nodes)
-    assert {"check_input", "classify", "search", "decide", "hand_off"} <= nodes
+    assert {"check_input", "classify", "search", "decide", "draft", "hand_off"} <= nodes
 
 
 def test_empty_ticket_goes_straight_to_a_person(monkeypatch):
@@ -80,3 +82,22 @@ def test_a_classifier_failure_is_explained_in_the_result(steps, monkeypatch):
 def test_search_and_classifier_share_one_embedding_model():
     from src.retrieve import get_embedder
     assert get_embedder("hashing") is get_embedder("hashing")
+
+
+def test_ticket_routed_automatic_goes_through_draft_and_keeps_the_decision(steps, monkeypatch):
+    classifier, retriever = steps
+    sure = Classifier(client=FakeLLM())
+    sure.accuracy = {k: 0.97 for k in sure.accuracy}           # pretend the measured confidence is high
+    monkeypatch.setattr(pipeline, "_classifier", sure)
+    ticket = next(t for t in TICKETS if retriever.search(t.text))
+    seen = []
+    for chunk in graph.build_graph().stream({"ticket": ticket}, stream_mode="updates"):
+        seen.extend(chunk)
+    assert seen[-2:] == ["draft", "hand_off"]
+    out = pipeline.process(ticket)
+    assert out.action == "escalate" and out.routing_decision == "auto_respond"
+    assert out.routing_rule == "all_conditions_met" and "B-08" in out.reason
+
+
+def test_same_ticket_twice_gives_the_same_decision_T04a(steps):
+    assert pipeline.process(TICKETS[3]) == pipeline.process(TICKETS[3])

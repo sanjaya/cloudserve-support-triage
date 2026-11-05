@@ -3,9 +3,9 @@
 The order of the steps is a LangGraph graph, defined in src/graph.py. This file holds what
 the steps share: the Result shape, and the classifier and search store (loaded once).
 
-Built so far: classifying the ticket (B-06) and searching the help articles (B-04).
-Still to come: decide (B-07), write the answer (B-08) and check it (B-09).
-Until then every ticket is sent to a person, with a reason, its labels and the passages found.
+Built so far: classifying the ticket (B-06), searching the help articles (B-04) and deciding
+(B-07). Still to come: write the answer (B-08) and check it (B-09). Until then every ticket is
+sent to a person; the routing decision is recorded so it can already be measured.
 The `Result` shape only gains optional fields, so the harness and the metrics keep working
 as each step is added.
 """
@@ -57,13 +57,17 @@ class Result:
     alternatives: list[dict[str, Any]] = field(default_factory=list)  # other intents considered (B-06)
     classifier_method: str | None = None  # how the intent was decided (B-06): see src/classify.py
     classifier_note: str | None = None    # anything the classifier wants a person to know, e.g. why it fell back
+    routing_decision: str | None = None   # what decide chose (B-07): auto_respond or escalate. Until B-08
+                                          # writes answers, action stays "escalate" even when this is auto_respond
+    routing_rule: str | None = None       # which routing rule decided (see src/route.py)
+    threshold: float | None = None        # the confidence threshold applied (B-07)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
 def process(ticket: Ticket) -> Result:
-    """Run one ticket through the graph (src/graph.py). For now every ticket goes to a person."""
+    """Run one ticket through the graph (src/graph.py). Until B-08, every ticket still goes to a person."""
     from src.graph import get_graph
     get_retriever(), get_classifier()      # load both before the graph runs steps side by side
     return get_graph().invoke({"ticket": ticket})["result"]

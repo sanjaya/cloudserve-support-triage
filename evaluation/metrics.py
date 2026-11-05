@@ -93,11 +93,19 @@ def compute(records: list[dict[str, Any]], decisions_logged: int | None = None) 
     hit_base = [r for r in labelled if r["labels"].get("expected_doc_ids")]
     hits = sum(1 for r in hit_base
                if {s.split("#")[0] for s in r["result"]["sources"]} & set(r["labels"]["expected_doc_ids"]))
+    # Routing (B-07): compare what decide chose with the label. Until answers are written (B-08),
+    # every action is "escalate", so we use the routing decision when there is one.
+    def routed(res: dict[str, Any]) -> str:
+        return res.get("routing_decision") or res["action"]
+
     route_base = [r for r in labelled if r["labels"].get("expected_route")]
     route_ok = sum(1 for r in route_base
-                   if (r["result"]["action"] == "auto_respond") == (r["labels"]["expected_route"] == "auto_respond"))
+                   if (routed(r["result"]) == "auto_respond") == (r["labels"]["expected_route"] == "auto_respond"))
+    routed_auto = [r for r in records if routed(r["result"]) == "auto_respond"]
+    routed_auto_labelled = [r for r in routed_auto if r.get("labels")]
     unsafe_auto = sum(1 for r in labelled
                       if r["labels"].get("must_not_auto_respond") and r["result"]["action"] == "auto_respond")
+    unsafe_routed = sum(1 for r in routed_auto_labelled if r["labels"].get("must_not_auto_respond"))
 
     guardrail_blocks = Counter()
     for res in results:
@@ -136,6 +144,11 @@ def compute(records: list[dict[str, Any]], decisions_logged: int | None = None) 
             "classifier_methods": dict(Counter(r.get("classifier_method") for r in results if r.get("classifier_method"))) or None,
             "retrieval_hit_rate_pct": _pct(hits, len(hit_base)) if any(r["result"]["sources"] for r in hit_base) else None,
             "routing_accuracy_pct": _pct(route_ok, len(route_base)),
+            "routed_to_automatic_answer_pct": _pct(len(routed_auto), n),
+            "routed_automatic_with_right_intent_pct": _pct(
+                sum(1 for r in routed_auto_labelled if r["result"].get("intent") == r["labels"].get("intent")),
+                len(routed_auto_labelled)) if routed_auto_labelled else None,
+            "routing_rules": dict(Counter(r.get("routing_rule") for r in results if r.get("routing_rule"))) or None,
             "latency_p50_s": _percentile(latencies, 0.50),
             "latency_p95_s": _percentile(latencies, 0.95),
         },
@@ -144,6 +157,7 @@ def compute(records: list[dict[str, Any]], decisions_logged: int | None = None) 
             "guardrail_activations_by_type": dict(guardrail_blocks),
             "private_data_detections": guardrail_blocks.get("pii", 0),
             "auto_responses_on_never_automate_tickets": unsafe_auto,
+            "routed_automatic_on_never_automate_tickets": unsafe_routed,
         },
         "segments": segments,
     }

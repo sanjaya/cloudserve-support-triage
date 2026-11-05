@@ -27,6 +27,8 @@ LLM_DISABLED = os.getenv("LLM_DISABLED", "0") == "1"
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
 CHROMA_PATH = os.getenv("CHROMA_PATH", str(STORAGE_DIR / "chroma"))
 DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{STORAGE_DIR / 'decisions.db'}")
+# Automatic answers need at least this confidence (FR-04). Chosen 5 Nov from the development-set
+# sweep (scripts/sweep_threshold.py): 0.70 to 0.95 all allow only tickets where both methods agree.
 CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", "0.80"))
 RETRIEVAL_TOP_K = int(os.getenv("RETRIEVAL_TOP_K", "5"))
 # How articles are split into passages: "section" or "fixed". "section" chosen on 2 Nov (scripts/compare_chunking.py).
