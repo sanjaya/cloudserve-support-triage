@@ -24,6 +24,9 @@ Each step is a "node". The graph says which node runs after which:
                 what the customer already said, the articles found, what the system was unsure
                 about, the reason and any draft (src/escalate.py, B-16).
 
+Kill switch (B-21): while it is on, decide sends every ticket to a person, and check stops any
+answer that was about to be sent (src/kill_switch.py).
+
 Failures (B-17): if search fails, decide sends the ticket to a person with that reason; if the
 language model is unavailable, classification falls back to the trained classifier, answers are
 not written, and the hand-off note is written by code. No failure stops the run.
@@ -43,7 +46,7 @@ from src.generate import Draft, generate
 from src.guardrails import GuardrailReport, check_answer
 from src.ingest import Ticket
 from src.retrieve import Passage
-from src import config
+from src import config, kill_switch
 from src.escalate import escalate
 from src.route import AUTO, ESCALATE, RouteDecision, route
 
@@ -58,6 +61,7 @@ class TicketState(TypedDict, total=False):
     safety: GuardrailReport    # the safety checks on the answer
     reason: str                # why, in words a support manager can read
     search_error: str          # set if search itself failed (B-17)
+    stopped: bool              # the kill switch was turned on before the answer was sent (B-21)
     result: Any                # the final pipeline.Result
 
 
@@ -93,7 +97,11 @@ def search(state: TicketState) -> dict:
 def decide(state: TicketState) -> dict:
     """Apply the routing rules (src/route.py)."""
     label = state["classification"]
-    if state.get("search_error"):
+    if kill_switch.is_on():
+        decision = RouteDecision(ESCALATE, "kill_switch",
+                                 "Automatic answers are switched off (kill switch), so a person will handle it.",
+                                 config.CONFIDENCE_THRESHOLD)
+    elif state.get("search_error"):
         decision = RouteDecision(ESCALATE, "search_failed",
                                  f"Searching the help articles failed ({state['search_error']}), so a person "
                                  "will handle it.", config.CONFIDENCE_THRESHOLD)
@@ -129,11 +137,15 @@ def check(state: TicketState) -> dict:
     from src.pipeline import get_llm_client
     report = check_answer(state["ticket"], state["classification"], state["answer_draft"],
                           state["passages"], client=get_llm_client())
+    if report.passed and kill_switch.is_on():   # switched off while this ticket was being answered
+        return {"safety": report, "stopped": True,
+                "reason": "The answer was ready, but automatic answers were switched off (kill switch) before it "
+                          "was sent, so a person will handle it, with the draft attached."}
     return {"safety": report, "reason": report.reason}
 
 
 def after_check(state: TicketState) -> str:
-    return "reply" if state["safety"].passed else "hand_off"
+    return "reply" if state["safety"].passed and not state.get("stopped") else "hand_off"
 
 
 def _result(state: TicketState, action: str, reason: str, handoff: dict | None = None):

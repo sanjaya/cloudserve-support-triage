@@ -11,31 +11,42 @@ half of all tickets are still passed to senior staff. This system:
 - passes every other ticket to a person, with a short summary and the useful articles attached;
 - records every decision and the reason for it, so any answer can be explained later.
 
-> Status: week two. Setup (B-01), ticket reading (B-02), the run harness (B-05), searching
-> the help articles (B-03, B-04), classifying tickets (B-06), deciding (B-07), writing the
-> answer (B-08), the safety checks on answers (B-09), the decision log (B-10), live
-> monitoring with Prometheus and Grafana (B-12), continuous integration (B-13), the hand-off
-> note for people (B-16) and failure handling (B-17) are done. Next: the full gate run (B-11).
+> Status: build complete. Done: B-01 to B-14, B-16, B-17 and B-19 to B-21. The gate run
+> (B-11) passed all 9 checks on the 80 validation tickets and on a 120-ticket rehearsal of the
+> hidden set. Governance: kill switch (B-21) and fairness audit (B-14). The human review kit
+> (B-22) is ready; the two-person human review is requested from the capstone reviewer.
+> Next: report and video (B-15).
+> Not done (Should items): urgency ordering of the queue (B-18) and the API endpoint (B-23).
 
-## Requirements
+## Assessor quick start (clean checkout, about 15 minutes)
 
-- Python 3.10 or later
-- Git
-- An OpenRouter API key (from openrouter.ai) for the language model
-- About 4 GB of free disk space (embedding model and vector store)
-
-## Setup
+These are the exact steps to repeat the gate run on a fresh machine. Nothing else is needed:
+the trained classifier and its measured confidence (`models/`) and the help articles and
+validation tickets (`data/`) are in the repository.
 
 ```bash
-git clone <repository-url> cloudserve-support-triage
+git clone https://github.com/sanjaya/cloudserve-support-triage.git
 cd cloudserve-support-triage
-python3 -m venv .venv
-source .venv/bin/activate            # Windows: .venv\Scripts\activate
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
-cp .env.example .env                 # then put your key in .env (OPENROUTER_API_KEY)
-python scripts/check_model.py        # should print: openrouter / meta-llama/llama-3.1-8b-instruct: 'ready'
+python3 -m venv .venv && source .venv/bin/activate
+python -m pip install --upgrade pip && python -m pip install -r requirements.txt
+cp .env.example .env                       # put your OpenRouter key in OPENROUTER_API_KEY
+python scripts/check_model.py              # 'ready'
+python -m pytest tests/ -q                 # all pass, no key or internet needed
+
+# the hidden set: give its path with --input (JSON array or JSON Lines both work)
+python -m evaluation.harness --input <hidden_tickets_file> --output evaluation/results/
+python scripts/check_gate.py --run evaluation/results/run_<...> --input <hidden_tickets_file>
 ```
+
+The harness writes `results.jsonl`, `metrics.json` and `metrics.md` into a new dated folder,
+and one record per step per ticket into the decision log. `check_gate.py` writes
+`gate_check.md` next to them and exits with 1 if any check fails. The model calls are paced
+and cached, so about 120 tickets take around 35 minutes the first time and seconds when
+repeated. If the provider fails part-way, the run still finishes: affected tickets go to a
+person with the reason.
+
+To try it without a key: set `LLM_DISABLED=1`. Every ticket then goes to a person, with a
+hand-off note written by code (this is what CI runs on every push).
 
 ## Run
 
@@ -89,6 +100,22 @@ python scripts/induce_failures.py
 # see how one ticket was handled, step by step, from the decision log (latest run)
 python -m src.logging_store --ticket VAL-0001
 
+# KILL SWITCH (B-21): stop all automatic answers at once, no restart needed (takes effect on
+# the next ticket, even in a run that is already going). Every change is logged with who and why.
+python -m src.kill_switch on --by "Marcus Adeyemi" --reason "wrong answers reported"
+python -m src.kill_switch status
+python -m src.kill_switch off --by "Marcus Adeyemi"
+
+# fairness audit (B-14, NFR-06): compare resolution and quality across tier, region, fluency,
+# ticket length and channel for a finished run (no model calls)
+python scripts/fairness_audit.py --run evaluation/results/run_<...> --input data/validation_tickets.json \
+    --dev-classifier evaluation/results/classifier_per_ticket.csv
+
+# human review of 50 answers (B-22, NFR-03): make the two-reviewer workbook (about 50 model calls
+# for the automatic judge PR-08), have two people fill it in, then score it
+python scripts/prepare_review.py --runs evaluation/results/run_<gate> evaluation/results/run_<rehearsal>
+python scripts/score_review.py --review evaluation/results/review_<...>
+
 # full unattended run over any ticket file; results go to a dated folder inside --output
 python -m evaluation.harness --input data/validation_tickets.json --output evaluation/results/
 ```
@@ -135,7 +162,7 @@ no help passage matched -> a person; otherwise -> answer automatically. The deci
 code, so the same ticket always gets the same decision.
 
 How the steps are joined: the ticket flow is a LangGraph graph (`src/graph.py`). Classify and
-search run side by side, then decide, then hand-off (or, from B-07, an answer). To see the graph:
+search run side by side, then decide, then either the answer (draft, safety checks, reply) or the hand-off note. To see the graph:
 `python -m src.graph` prints it as a Mermaid diagram. LangChain is used for the model call
 (`ChatOpenAI` pointed at OpenRouter, prompts as `ChatPromptTemplate`) and for search
 (`langchain-chroma` with `HuggingFaceEmbeddings`). See `docs/architecture.md`.
@@ -168,11 +195,11 @@ and no API key. They check that the code works, not how good the real model's re
 | `tests/` | Automatic tests |
 | `evaluation/` | The run harness, its results and the metrics |
 | `docs/` | How the system is designed |
-| `.github/workflows/ci.yml` | Continuous integration: key scan and tests on every push (B-13) |
+| `.github/workflows/ci.yml` | Continuous integration on every push: key scan, tests, and a 6-ticket pipeline run with the gate check (B-13) |
 | `monitoring/` | Prometheus and Grafana set-up and the dashboard (B-12) |
+| `models/` | The trained classifier and its measured confidence (committed) |
 | `data/` | Help articles and validation tickets only (see `data/README.md`) |
 | `scripts/` | Small helper scripts, including the Stage 1 data analysis |
-| `.github/workflows/` | Runs the tests automatically on every push |
 
 ## Attribution
 

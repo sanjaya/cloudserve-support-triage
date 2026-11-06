@@ -35,7 +35,7 @@ ESCALATE = "escalate"
 # Short names for the rule that decided, used in the metrics report and the decision log.
 # ("no_text" is set by the graph for empty tickets, which never reach decide; "search_failed" by
 # decide when search itself failed.)
-RULES = ("no_text", "search_failed", "not_classified", "never_automate", "low_confidence", "no_passage", "all_conditions_met")
+RULES = ("no_text", "kill_switch", "search_failed", "not_classified", "never_automate", "low_confidence", "no_passage", "all_conditions_met")
 
 
 @dataclass(frozen=True)

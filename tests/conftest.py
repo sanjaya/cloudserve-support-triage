@@ -19,3 +19,6 @@ os.environ["CLASSIFIER_MODEL_PATH"] = os.path.join(tempfile.mkdtemp(prefix="clf_
 os.environ["CLASSIFIER_CALIBRATION_PATH"] = os.path.join(tempfile.mkdtemp(prefix="cal_test_"), "none.json")
 # The decision log goes to a temporary database, never storage/decisions.db.
 os.environ["DATABASE_URL"] = "sqlite:///" + os.path.join(tempfile.mkdtemp(prefix="decisions_test_"), "decisions.db")
+# The kill switch file lives in a temporary folder, so a real storage/KILL_SWITCH never affects tests.
+os.environ["KILL_SWITCH_FILE"] = os.path.join(tempfile.mkdtemp(prefix="kill_switch_test_"), "KILL_SWITCH")
+os.environ.pop("KILL_SWITCH", None)

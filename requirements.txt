@@ -17,6 +17,7 @@ sentence-transformers==3.4.1
 
 # Data and evaluation
 pandas==2.2.3
+openpyxl==3.1.5            # the human review workbook (B-22)
 numpy==2.1.0
 scikit-learn==1.5.2
 
