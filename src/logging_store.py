@@ -12,7 +12,10 @@ For each ticket there is one record per step it went through:
   route      FR-04, FR-05  automatic or a person, the rule that decided, the threshold
   draft      FR-06         answer status, citations, which check decided, prompt PR-03
   safety     FR-07         every safety-check result and what it found, prompts PR-05 / PR-06
-  final      FR-08, FR-09  what happened in the end (auto_respond / escalate / block) and why
+  handoff    FR-08         the hand-off note for a person: summary, what the customer already
+                           said, articles, what the system was unsure about, prompt PR-04
+  final      FR-09, FR-12  what happened in the end (auto_respond / escalate / block) and why,
+                           including any failure
 
 Every record has the run, the ticket, an input summary, the action and a plain-language
 reason. A ticket that failed part-way still gets its "final" record. The harness checks that the
@@ -29,9 +32,9 @@ from typing import Any
 
 from src import config
 
-STEPS = ("classify", "search", "route", "draft", "safety", "final")
+STEPS = ("classify", "search", "route", "draft", "safety", "handoff", "final")
 REQUIREMENTS = {"classify": "FR-02", "search": "FR-03", "route": "FR-04, FR-05", "draft": "FR-06",
-                "safety": "FR-07", "final": "FR-08, FR-09"}
+                "safety": "FR-07", "handoff": "FR-08", "final": "FR-09, FR-12"}
 
 _engine = None
 _table = None
@@ -133,6 +136,14 @@ def records_for(run_id: str, ticket: Any, result: Any, system_version: str = "")
                        guardrail_results=r["guardrails"], details={"notes": r.get("guardrail_notes")},
                        reason="; ".join(f"{k}: {v}" for k, v in (r.get("guardrail_notes") or {}).items()) or
                        "all checks passed"))
+    h = r.get("handoff")
+    if h:
+        out.append(rec("handoff", model=config.LLM_MODEL if h.get("written_by") == "PR-04" else "code",
+                       prompt_version=h.get("prompt_version"), prediction=h.get("intent"),
+                       confidence=h.get("confidence"), sources=h.get("relevant_articles"),
+                       action="to a person", reason=h.get("summary"),
+                       details={k: h.get(k) for k in ("already_provided_by_customer", "system_uncertain_about",
+                                                      "suggested_first_question", "written_by", "note")}))
     out.append(rec("final", prediction=r.get("intent"), confidence=r.get("confidence"),
                    alternatives=r.get("alternatives"), sources=r.get("sources"), threshold=r.get("threshold"),
                    action=r["action"], reason=r["reason"], guardrail_results=r.get("guardrails") or None,
@@ -156,7 +167,9 @@ def tickets_logged(run_id: str) -> int:
     from sqlalchemy import func, select
     engine, table = _db()
     with engine.connect() as conn:
-        return conn.execute(select(func.count(func.distinct(table.c.ticket_id)))
+        # Count final records, not distinct ticket ids: a file can contain the same id twice, or
+        # several broken records without an id, and each one must still be accounted for.
+        return conn.execute(select(func.count()).select_from(table)
                             .where(table.c.run_id == run_id, table.c.step == "final")).scalar_one()
 
 

@@ -22,6 +22,10 @@ LLM_CACHE_PATH = os.getenv("LLM_CACHE_PATH", str(STORAGE_DIR / "llm_cache.sqlite
 # Free-tier limits: wait at least this many seconds between calls, and try this many times.
 LLM_MIN_INTERVAL_S = float(os.getenv("LLM_MIN_INTERVAL_S", "2"))
 LLM_MAX_ATTEMPTS = int(os.getenv("LLM_MAX_ATTEMPTS", "6"))
+# Circuit breaker (B-17): after this many failed model questions in a row, stop calling the
+# provider for this many seconds; affected tickets go straight to a person.
+LLM_CIRCUIT_FAILURES = int(os.getenv("LLM_CIRCUIT_FAILURES", "2"))
+LLM_CIRCUIT_COOLDOWN_S = float(os.getenv("LLM_CIRCUIT_COOLDOWN_S", "60"))
 # Set to 1 to stop all model calls (the automatic tests do this).
 LLM_DISABLED = os.getenv("LLM_DISABLED", "0") == "1"
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")

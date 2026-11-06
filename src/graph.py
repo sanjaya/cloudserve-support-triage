@@ -19,8 +19,14 @@ Each step is a "node". The graph says which node runs after which:
 - check       : the safety checks on the answer (src/guardrails.py, B-09). Every check runs and
                 every result is recorded; any block, or a check that could not run, stops the answer.
 - reply       : the answer goes to the customer (action "auto_respond").
-- hand_off    : the ticket goes to a person, with the reason and any draft attached (action
-                "escalate", or "block" when the safety checks stopped the answer).
+- hand_off    : the ticket goes to a person (action "escalate", or "block" when the safety
+                checks stopped the answer) with a hand-off note: summary, intent, urgency,
+                what the customer already said, the articles found, what the system was unsure
+                about, the reason and any draft (src/escalate.py, B-16).
+
+Failures (B-17): if search fails, decide sends the ticket to a person with that reason; if the
+language model is unavailable, classification falls back to the trained classifier, answers are
+not written, and the hand-off note is written by code. No failure stops the run.
 
 The harness keeps calling pipeline.process().
 
@@ -37,7 +43,9 @@ from src.generate import Draft, generate
 from src.guardrails import GuardrailReport, check_answer
 from src.ingest import Ticket
 from src.retrieve import Passage
-from src.route import AUTO, RouteDecision, route
+from src import config
+from src.escalate import escalate
+from src.route import AUTO, ESCALATE, RouteDecision, route
 
 
 class TicketState(TypedDict, total=False):
@@ -49,6 +57,7 @@ class TicketState(TypedDict, total=False):
     answer_draft: Draft        # the written answer and whether it passed its checks
     safety: GuardrailReport    # the safety checks on the answer
     reason: str                # why, in words a support manager can read
+    search_error: str          # set if search itself failed (B-17)
     result: Any                # the final pipeline.Result
 
 
@@ -73,14 +82,29 @@ def classify(state: TicketState) -> dict:
 
 
 def search(state: TicketState) -> dict:
+    """Find passages. If search itself fails, record why; decide then sends the ticket to a person."""
     from src.pipeline import get_retriever
-    return {"passages": get_retriever().search(state["ticket"].text)}
+    try:
+        return {"passages": get_retriever().search(state["ticket"].text)}
+    except Exception as exc:
+        return {"passages": [], "search_error": f"{type(exc).__name__}: {exc}"}
 
 
 def decide(state: TicketState) -> dict:
     """Apply the routing rules (src/route.py)."""
-    decision = route(state["classification"], state["passages"])
-    return {"decision": decision, "reason": decision.reason}
+    label = state["classification"]
+    if state.get("search_error"):
+        decision = RouteDecision(ESCALATE, "search_failed",
+                                 f"Searching the help articles failed ({state['search_error']}), so a person "
+                                 "will handle it.", config.CONFIDENCE_THRESHOLD)
+    else:
+        decision = route(label, state["passages"])
+    reason = decision.reason
+    if label.method == "trained_only":
+        reason += " (The language model was unavailable, so only the trained classifier was used.)"
+    elif label.method == "fallback" and "language model not available" in (label.note or ""):
+        reason += " (The language model was unavailable.)"
+    return {"decision": decision, "reason": reason}
 
 
 def after_decide(state: TicketState) -> str:
@@ -112,7 +136,7 @@ def after_check(state: TicketState) -> str:
     return "reply" if state["safety"].passed else "hand_off"
 
 
-def _result(state: TicketState, action: str, reason: str):
+def _result(state: TicketState, action: str, reason: str, handoff: dict | None = None):
     from src.pipeline import Result
     label, decision, d = state["classification"], state["decision"], state.get("answer_draft")
     safety = state.get("safety")
@@ -125,7 +149,7 @@ def _result(state: TicketState, action: str, reason: str):
                   routing_rule=decision.rule, threshold=decision.threshold,
                   draft=d.to_dict() if d else None,
                   guardrails=dict(safety.results) if safety else {},
-                  guardrail_notes=dict(safety.notes) if safety else {})
+                  guardrail_notes=dict(safety.notes) if safety else {}, handoff=handoff)
 
 
 def reply(state: TicketState) -> dict:
@@ -137,11 +161,16 @@ def hand_off(state: TicketState) -> dict:
     from src.pipeline import Result
     ticket = state["ticket"]
     if state.get("classification") is None:      # came straight from check_input
-        return {"result": Result(ticket.ticket_id, "escalate",
-                                 "The ticket has no message text, so a person needs to look at it.",
-                                 routing_decision="escalate", routing_rule="no_text")}
+        reason = "The ticket has no message text, so a person needs to look at it."
+        note = escalate(ticket, None, [], None, reason, use_model=False)
+        return {"result": Result(ticket.ticket_id, "escalate", reason, routing_decision="escalate",
+                                 routing_rule="no_text", handoff=note)}
+    from src.pipeline import get_llm_client
     blocked = state.get("safety") is not None and not state["safety"].passed
-    return {"result": _result(state, "block" if blocked else "escalate", state["reason"])}
+    d = state.get("answer_draft")
+    note = escalate(ticket, state["classification"], state.get("passages", []), d.to_dict() if d else None,
+                    state["reason"], client=get_llm_client())
+    return {"result": _result(state, "block" if blocked else "escalate", state["reason"], note)}
 
 
 # ------------------------------------------------------------------ the graph

@@ -38,8 +38,9 @@ def test_a_failed_ticket_still_gets_a_final_record(tmp_path, monkeypatch):
     monkeypatch.setattr(harness, "process", boom)
     out = _run(tmp_path, [{"ticket_id": "FAIL-1", "channel": "chat", "body": "hi"}])
     rows = logging_store.history("FAIL-1", json.loads((out / "metrics.json").read_text())["meta"]["run_id"])
-    assert [r["step"] for r in rows] == ["final"]
-    assert rows[0]["action"] == "escalate" and "provider down" in rows[0]["details"]["error"]
+    assert [r["step"] for r in rows] == ["handoff", "final"]          # a person still gets a note (B-16)
+    assert rows[1]["action"] == "escalate" and "provider down" in rows[1]["details"]["error"]
+    assert "provider down" in rows[0]["details"]["system_uncertain_about"] or rows[0]["reason"]
 
 
 def test_every_step_of_an_answered_ticket_is_recorded_with_prompt_versions():

@@ -85,13 +85,14 @@ def _parse_time(value: Any) -> str | None:
 def normalise(raw: Any) -> Ticket:
     """Turn one raw ticket from any channel into a Ticket. This function never crashes."""
     issues: list[str] = []
+    original = raw
     if not isinstance(raw, dict):
         issues.append(f"not_a_record:{type(raw).__name__}")
         raw = {}
 
     ticket_id = clean_text(raw.get("ticket_id"))
     if not ticket_id:
-        digest = hashlib.sha1(json.dumps(raw, sort_keys=True, default=str).encode()).hexdigest()[:8]
+        digest = hashlib.sha1(json.dumps(original, sort_keys=True, default=str).encode()).hexdigest()[:8]
         ticket_id = f"UNKNOWN-{digest}"
         issues.append("missing_ticket_id")
 

@@ -41,8 +41,13 @@ def expected(ticket, classifier, retriever):
 
 
 def test_graph_gives_the_same_result_as_the_steps_run_by_hand(steps):
+    import dataclasses
+
+    from src.escalate import is_complete
     for t in TICKETS[:20]:
-        assert pipeline.process(t) == expected(t, *steps)
+        out = pipeline.process(t)
+        assert dataclasses.replace(out, handoff=None) == expected(t, *steps)
+        assert out.action == "auto_respond" or is_complete(out.handoff)       # T-08a
 
 
 def test_graph_has_the_planned_steps():

@@ -73,6 +73,11 @@ def macro_precision(per: dict[str, dict[str, Any]]) -> float | None:
     return round(100 * sum(values) / len(values), 1) if values else None
 
 
+def _complete(note: dict[str, Any] | None) -> bool:
+    from src.escalate import is_complete
+    return is_complete(note)
+
+
 def compute(records: list[dict[str, Any]], decisions_logged: int | None = None) -> dict[str, Any]:
     n = len(records)
     results = [r["result"] for r in records]
@@ -120,6 +125,14 @@ def compute(records: list[dict[str, Any]], decisions_logged: int | None = None) 
     unanswerable_routed = [r for r in routed_auto_labelled if r["labels"].get("answerable_from_docs") is False]
     unanswerable_stopped = sum(1 for r in unanswerable_routed if r["result"]["action"] != "auto_respond")
     disclosed = sum(1 for r in sent if "drafted automatically" in (r["result"].get("answer") or ""))
+
+    # Hand-off notes for people (B-16)
+    to_person = [r for r in records if r["result"]["action"] in ("escalate", "block")]
+    notes = [(r, r["result"].get("handoff")) for r in to_person]
+    complete = sum(1 for _, h in notes if _complete(h))
+    articles_ok = sum(1 for r, h in notes if h and set(h.get("relevant_articles") or [])
+                      <= {s.split("#")[0] for s in r["result"].get("sources") or []})
+    by_model = sum(1 for _, h in notes if h and h.get("written_by") == "PR-04")
 
     guardrail_blocks, guardrail_errors = Counter(), Counter()
     for res in results:
@@ -184,6 +197,9 @@ def compute(records: list[dict[str, Any]], decisions_logged: int | None = None) 
             "auto_responses_on_never_automate_tickets": unsafe_auto,
             "routed_automatic_on_never_automate_tickets": unsafe_routed,
             "replies_with_automatic_disclosure_pct": _pct(disclosed, len(sent)),
+            "hand_offs_complete_pct": _pct(complete, len(to_person)),
+            "hand_off_articles_all_found_by_search_pct": _pct(articles_ok, len(to_person)),
+            "hand_off_notes_written_by_model": f"{by_model} of {len(to_person)}" if to_person else None,
         },
         "segments": segments,
     }

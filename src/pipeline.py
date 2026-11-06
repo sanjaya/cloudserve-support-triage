@@ -60,6 +60,8 @@ class Result:
     answer: str | None = None         # reply sent to the customer, only for auto_respond (B-08)
     guardrails: dict[str, str] = field(default_factory=dict)  # each safety check: pass, block or error (B-09)
     guardrail_notes: dict[str, str] = field(default_factory=dict)  # what each check found (B-09)
+    handoff: dict[str, Any] | None = None  # the hand-off note for a person (B-16): summary, intent, urgency,
+                                           # already provided, articles, uncertainty, reason, draft
     error: str | None = None          # filled in if a step failed and the ticket went to a person
     alternatives: list[dict[str, Any]] = field(default_factory=list)  # other intents considered (B-06)
     classifier_method: str | None = None  # how the intent was decided (B-06): see src/classify.py

@@ -151,6 +151,16 @@ class LLMClient:
         self._cache = _Cache(Path(cache_path or config.LLM_CACHE_PATH))
         self.calls_made = 0       # real calls to the provider (for the metrics report)
         self.cache_hits = 0
+        self.rate_limit_events = 0  # "too many requests" replies, each followed by a wait (NFR-07)
+        self.failed_calls = 0       # questions the provider could not answer, even after retries
+        self.circuit_opened = 0     # how often the circuit breaker stopped calls (B-17)
+        # Circuit breaker (B-17): after this many failed questions in a row, stop calling the
+        # provider for a while, so each remaining ticket goes to a person at once instead of
+        # waiting through every retry. Answers already in the cache are still used.
+        self._breaker_failures = config.LLM_CIRCUIT_FAILURES
+        self._breaker_cooldown = config.LLM_CIRCUIT_COOLDOWN_S
+        self._failures_in_a_row = 0
+        self._open_until = 0.0
 
     def _chat_model(self, max_tokens: int):
         """LangChain's ChatOpenAI, pointed at OpenRouter."""
@@ -179,6 +189,10 @@ class LLMClient:
             self.cache_hits += 1
             return cached
 
+        if time.monotonic() < self._open_until:
+            raise LLMError(f"provider unavailable: {self._failures_in_a_row} failures in a row, not calling it "
+                           f"for {self._open_until - time.monotonic():.0f} more seconds")
+
         import openai
         from langchain_core.messages import HumanMessage, SystemMessage
         from tenacity import (RetryError, retry, retry_if_exception_type, stop_after_attempt,
@@ -196,7 +210,11 @@ class LLMClient:
             if wait > 0:
                 time.sleep(wait)
             self._last_call = time.monotonic()
-            response = model.invoke(messages)
+            try:
+                response = model.invoke(messages)
+            except openai.RateLimitError:
+                self.rate_limit_events += 1
+                raise
             self.calls_made += 1
             content = response.content
             return content if isinstance(content, str) else "".join(
@@ -205,13 +223,30 @@ class LLMClient:
         try:
             reply = _call()
         except RetryError as exc:
+            self._failed()
             raise LLMError(f"provider kept failing: {exc.last_attempt.exception()}") from exc
         except openai.OpenAIError as exc:
+            self._failed()
             raise LLMError(f"provider error: {type(exc).__name__}: {exc}") from exc
+        self._failures_in_a_row = 0
         if not reply.strip():                     # e.g. all the room was used for thinking
             raise LLMError("the model returned an empty reply")
         self._cache.put(key, reply)
         return reply
+
+    def _failed(self) -> None:
+        """Count a failed question; open the circuit breaker after too many in a row."""
+        self.failed_calls += 1
+        self._failures_in_a_row += 1
+        if self._failures_in_a_row >= self._breaker_failures:
+            self._open_until = time.monotonic() + self._breaker_cooldown
+            self.circuit_opened += 1
+
+    def usage(self) -> dict[str, int]:
+        """Counts for the metrics report (NFR-07)."""
+        return {"model_calls": self.calls_made, "cache_hits": self.cache_hits,
+                "rate_limit_events": self.rate_limit_events, "failed_calls": self.failed_calls,
+                "circuit_breaker_opened": self.circuit_opened}
 
     def complete_json(self, system: str, user: str, max_tokens: int = 400) -> dict:
         return parse_json(self.complete(system, user, max_tokens))

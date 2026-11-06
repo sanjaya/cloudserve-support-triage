@@ -25,7 +25,9 @@ from pathlib import Path
 from tqdm import tqdm
 
 from evaluation import metrics as M
+from src.escalate import escalate
 from src.guardrails import remember_customers
+from src.llm import get_client
 from src.logging_store import log_decision, tickets_logged
 from src.monitoring import get_metrics
 from src.ingest import load_raw, normalise
@@ -63,6 +65,7 @@ def run(input_path: str, output_dir: str, limit: int | None = None, metrics_port
         port = metrics.serve(metrics_port)
         print(f"Live metrics at http://localhost:{port}/metrics")
 
+    usage_before = get_client().usage()
     records, log_errors = [], []
     version = _git_version()
     # The run's id in the decision log: the folder name plus a short random part, so two runs
@@ -75,9 +78,10 @@ def run(input_path: str, output_dir: str, limit: int | None = None, metrics_port
             try:
                 result = process(ticket)
             except Exception as exc:  # FR-12: one bad ticket must never stop the whole run
-                result = Result(ticket.ticket_id, "escalate",
-                                "One of the steps failed, so a person will handle this ticket.",
-                                error=f"{type(exc).__name__}: {exc}")
+                reason = "One of the steps failed, so a person will handle this ticket."
+                result = Result(ticket.ticket_id, "escalate", reason, error=f"{type(exc).__name__}: {exc}",
+                                handoff=escalate(ticket, None, [], None, f"{reason} ({type(exc).__name__}: {exc})",
+                                                 use_model=False))
             latency = time.perf_counter() - t0
             labels = raw.get("labels", {}) if isinstance(raw, dict) else {}
             record = {
@@ -109,6 +113,8 @@ def run(input_path: str, output_dir: str, limit: int | None = None, metrics_port
         "duration_s": round((finished - started).total_seconds(), 1),
         "system_version": version,
         "run_id": run_id,
+        # NFR-07: model calls, cache hits, rate-limit events and failures during this run
+        "model_usage": {k: v - usage_before.get(k, 0) for k, v in get_client().usage().items()},
     }
     try:
         logged = tickets_logged(run_id)

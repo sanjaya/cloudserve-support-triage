@@ -64,6 +64,8 @@ graph TD
 | Classify (B-06) | – | trained classifier, agreement cases, measured confidence | Our own measured design (Stage 5, change 2); LangChain has no part for it |
 | Write the answer (B-08) | the model call (`ChatOpenAI`, `ChatPromptTemplate` from PR-03) | citation and status checks in `src/generate.py` | The checks must be plain code so a bad citation can never reach a customer |
 | Safety checks (B-09) | the model calls for PR-05 and PR-06 | the private-data and promise patterns, and the rule that any block or error stops the answer | Code checks are exact and free; a check that cannot run must stop the answer, not let it through |
+| Hand-off note (B-16) | the model call for PR-04 | intent, reason, confidence and articles filled by code; fallback note when the model is down | A person must be able to trust the facts in the note; a missing model must not mean a missing note |
+| Failure handling (B-17) | – | retries with growing waits, circuit breaker, search-failure route, malformed-input handling | No failure may stop the run (FR-12, NFR-02) |
 | Decide (B-07) | the conditional edge out of decide | the rules in `src/route.py` | Must be plain code so the same ticket always gets the same decision (FR-04) |
 
 Prompts stay as versioned files in `prompts/`. `src/llm.py` turns each file into a LangChain

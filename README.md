@@ -14,7 +14,8 @@ half of all tickets are still passed to senior staff. This system:
 > Status: week two. Setup (B-01), ticket reading (B-02), the run harness (B-05), searching
 > the help articles (B-03, B-04), classifying tickets (B-06), deciding (B-07), writing the
 > answer (B-08), the safety checks on answers (B-09), the decision log (B-10), live
-> monitoring with Prometheus and Grafana (B-12) and continuous integration (B-13) are done.
+> monitoring with Prometheus and Grafana (B-12), continuous integration (B-13), the hand-off
+> note for people (B-16) and failure handling (B-17) are done. Next: the full gate run (B-11).
 
 ## Requirements
 
@@ -74,6 +75,10 @@ python scripts/train_classifier.py
 docker compose -f monitoring/docker-compose.yml up -d
 python -m evaluation.harness --input data/validation_tickets.json --output evaluation/results/ --metrics-port 8001 --pace 2 --keep-serving
 
+# failure test: cut the model provider off part-way through a real run, plus broken tickets;
+# checks the run still finishes with every ticket logged (FR-12, A11). Costs nothing.
+python scripts/induce_failures.py
+
 # see how one ticket was handled, step by step, from the decision log (latest run)
 python -m src.logging_store --ticket VAL-0001
 
@@ -96,6 +101,18 @@ other customers' names); promises of refunds, fixes or dates; instructions hidde
 (a code pattern plus prompt PR-06); and whether every claim is supported by the cited passage
 (prompt PR-05). If any check blocks, or cannot run, the answer is not sent (action "block") and
 a person handles the ticket. Every result is recorded in the run's results.
+
+Every ticket that goes to a person gets a hand-off note (`src/escalate.py`, FR-08): a short
+summary, intent, urgency and confidence, what the customer has already told us, the articles
+search found, what the system was unsure about, the reason, a suggested first question and any
+draft. Prompt PR-04 writes the summary parts; code fills the rest, so the model cannot change the
+intent, the reason or the articles. If the model is down, code writes a plain note instead.
+
+When something breaks (FR-12), the ticket goes to a person with the reason, and the run carries
+on: a timed-out or rate-limited model call is retried with growing waits; after repeated failures
+a circuit breaker stops calling the provider for a minute so the remaining tickets are not each
+held up (answers already in the cache still work); a failed search, or a broken ticket record,
+is handled the same way. `scripts/induce_failures.py` proves it in a real run.
 
 Every decision is also written to the decision log (`src/logging_store.py`, FR-09): a database
 table at `DATABASE_URL` (SQLite `storage/decisions.db` by default, not committed) with one record
