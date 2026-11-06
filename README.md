@@ -1,5 +1,7 @@
 # CloudServe support triage
 
+[![CI](https://github.com/sanjaya/cloudserve-support-triage/actions/workflows/ci.yml/badge.svg)](https://github.com/sanjaya/cloudserve-support-triage/actions/workflows/ci.yml)
+
 Capstone project, Forward Deployed AI Engineering. Sanjaya Kumar Panigrahy.
 
 CloudServe's help articles already answer about seven in ten support tickets, but more than
@@ -11,8 +13,8 @@ half of all tickets are still passed to senior staff. This system:
 
 > Status: week two. Setup (B-01), ticket reading (B-02), the run harness (B-05), searching
 > the help articles (B-03, B-04), classifying tickets (B-06), deciding (B-07), writing the
-> answer (B-08), the safety checks on answers (B-09), the decision log (B-10) and live
-> monitoring with Prometheus and Grafana (B-12) are done.
+> answer (B-08), the safety checks on answers (B-09), the decision log (B-10), live
+> monitoring with Prometheus and Grafana (B-12) and continuous integration (B-13) are done.
 
 ## Requirements
 
@@ -125,6 +127,9 @@ See `src/classify.py`.
 
 ```bash
 python -m pytest tests/ -v
+
+# check that no key or token is in the repository or its history (CI runs this on every push)
+python scripts/check_no_secrets.py --history
 ```
 
 The tests use a small offline stand-in for the embedding model, so they need no internet
@@ -139,6 +144,7 @@ and no API key. They check that the code works, not how good the real model's re
 | `tests/` | Automatic tests |
 | `evaluation/` | The run harness, its results and the metrics |
 | `docs/` | How the system is designed |
+| `.github/workflows/ci.yml` | Continuous integration: key scan and tests on every push (B-13) |
 | `monitoring/` | Prometheus and Grafana set-up and the dashboard (B-12) |
 | `data/` | Help articles and validation tickets only (see `data/README.md`) |
 | `scripts/` | Small helper scripts, including the Stage 1 data analysis |

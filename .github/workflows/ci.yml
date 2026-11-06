@@ -1,13 +1,60 @@
+# Continuous integration (backlog item B-13): on every push and pull request,
+#  1. check that no key or token is in the repository or its history (NFR-04), and
+#  2. run all automatic tests on the oldest and newest Python we support.
+# No secret is used anywhere in this workflow: the tests need no API key and no internet
+# (they use an offline stand-in for the embedding model and a fake language model).
 name: CI
-on: [push, pull_request]
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:          # lets you start a run by hand from the Actions tab
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  test:
+  no-keys:
+    name: No keys in the repository or its history
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0      # the whole history, so a key committed and later deleted is still found
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python scripts/check_no_secrets.py --history
+
+  tests:
+    name: Tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.13"]
+    env:
+      LLM_DISABLED: "1"             # never call the language model
+      OPENROUTER_API_KEY: ""        # no key is given to CI
+      EMBEDDING_MODEL: hashing      # offline stand-in for the embedding model
+      HF_HUB_OFFLINE: "1"           # never download a model
+      ANONYMIZED_TELEMETRY: "False"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
-      - run: python -m pip install --upgrade pip
-      - run: python -m pip install -r requirements.txt
-      - run: python -m pytest tests/ -v
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - name: Install the CPU-only build of PyTorch (much smaller; the tests do not need a GPU)
+        run: python -m pip install --upgrade pip && python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - name: Install the project's packages
+        run: python -m pip install -r requirements.txt
+      - name: Check every file compiles
+        run: python -m compileall -q src evaluation scripts tests
+      - name: Run the tests
+        run: python -m pytest tests/ -v
