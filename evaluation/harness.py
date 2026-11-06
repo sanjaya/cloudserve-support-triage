@@ -42,6 +42,17 @@ def _git_version() -> str:
         return "unknown"
 
 
+def _git_clean() -> bool | None:
+    """True if the code being run is exactly the committed version (no uncommitted changes to
+    tracked files). The gate run (B-11) must be on committed code."""
+    try:
+        out = subprocess.run(["git", "status", "--porcelain", "--untracked-files=no"], capture_output=True,
+                             text=True, check=True, cwd=Path(__file__).resolve().parent.parent).stdout
+        return out.strip() == ""
+    except Exception:
+        return None
+
+
 def run(input_path: str, output_dir: str, limit: int | None = None, metrics_port: int | None = None,
         pace_s: float = 0.0, keep_serving: bool = False) -> Path:
     """Process every ticket in the file and write the results and the metrics report.
@@ -112,6 +123,7 @@ def run(input_path: str, output_dir: str, limit: int | None = None, metrics_port
         "started_utc": started.isoformat(timespec="seconds"),
         "duration_s": round((finished - started).total_seconds(), 1),
         "system_version": version,
+        "code_matches_commit": _git_clean(),
         "run_id": run_id,
         # NFR-07: model calls, cache hits, rate-limit events and failures during this run
         "model_usage": {k: v - usage_before.get(k, 0) for k, v in get_client().usage().items()},

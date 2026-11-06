@@ -75,6 +75,13 @@ python scripts/train_classifier.py
 docker compose -f monitoring/docker-compose.yml up -d
 python -m evaluation.harness --input data/validation_tickets.json --output evaluation/results/ --metrics-port 8001 --pace 2 --keep-serving
 
+# gate check (B-11): verify a finished run against acceptance criteria A9, A10 and A8
+python scripts/check_gate.py --run evaluation/results/run_<...> --input data/validation_tickets.json
+
+# rehearse the hidden set: 120 unlabelled tickets as JSON Lines, at a path outside the repo
+python scripts/make_rehearsal_set.py --out ~/workspace/rehearsal/rehearsal_120.jsonl
+python -m evaluation.harness --input ~/workspace/rehearsal/rehearsal_120.jsonl --output evaluation/results/
+
 # failure test: cut the model provider off part-way through a real run, plus broken tickets;
 # checks the run still finishes with every ticket logged (FR-12, A11). Costs nothing.
 python scripts/induce_failures.py
