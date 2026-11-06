@@ -16,7 +16,8 @@ half of all tickets are still passed to senior staff. This system:
 > hidden set. Governance: kill switch (B-21) and fairness audit (B-14). The human review kit
 > (B-22) is ready; the two-person human review is requested from the capstone reviewer.
 > Next: report and video (B-15).
-> Not done (Should items): urgency ordering of the queue (B-18) and the API endpoint (B-23).
+> Also done (Should items): monitoring (B-12) and a single-ticket API (B-23). Not done:
+> urgency ordering of the queue (B-18).
 
 ## Assessor quick start (clean checkout, about 15 minutes)
 
@@ -115,6 +116,14 @@ python scripts/fairness_audit.py --run evaluation/results/run_<...> --input data
 # for the automatic judge PR-08), have two people fill it in, then score it
 python scripts/prepare_review.py --runs evaluation/results/run_<gate> evaluation/results/run_<rehearsal>
 python scripts/score_review.py --review evaluation/results/review_<...>
+
+# single-ticket API (B-23): the same steps for one ticket at a time, e.g. for a live demo.
+# Then open http://127.0.0.1:8000/docs and use "Try it out" on POST /tickets.
+python -m src.api
+curl -X POST http://127.0.0.1:8000/tickets -H "Content-Type: application/json" \
+     -d '{"ticket_id": "DEMO-1", "channel": "email", "subject": "Webhooks failing", "body": "Signature verification fails for every delivery. We compute it over the parsed body."}'
+curl http://127.0.0.1:8000/tickets/DEMO-1        # how it was handled, from the decision log
+curl http://127.0.0.1:8000/health                # up? kill switch? model and threshold
 
 # full unattended run over any ticket file; results go to a dated folder inside --output
 python -m evaluation.harness --input data/validation_tickets.json --output evaluation/results/
